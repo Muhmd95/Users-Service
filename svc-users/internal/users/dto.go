@@ -59,7 +59,7 @@ type GetUserResponse struct {
 	PhoneNumbers []string  `json:"phone_numbers"`
 	BirthDate    time.Time `json:"birth_date"`
 	IsVerified   bool      `json:"is_verified"`
-	WalletCount  int       `json:"wallet_count"`
+	WalletIDs    []string  `json:"wallet_ids"`
 	Status       string    `json:"status"`
 	CreatedAt    time.Time `json:"created_at"`
 }
@@ -173,6 +173,76 @@ func ValidateNationalID(nationalID string) error {
 	}
 	if day <= 0 || day > 31 {
 		return ErrInvalidNationalID
+	}
+	return nil
+}
+
+func (r *VerifyEmailRequest) Validate() error {
+	r.Token = strings.TrimSpace(r.Token)
+	if r.Token == "" {
+		return fmt.Errorf("token is required")
+	}
+	return nil
+}
+
+func (r *LoginRequest) Validate() error {
+	r.PhoneNumber = strings.TrimSpace(r.PhoneNumber)
+	if err := ValidatePhoneNumber(&r.PhoneNumber); err != nil {
+		return err
+	}
+	if len(r.Password) == 0 {
+		return fmt.Errorf("password is required")
+	}
+	return nil
+}
+
+func (r *RefreshTokenRequest) Validate() error {
+	r.RefreshToken = strings.TrimSpace(r.RefreshToken)
+	if r.RefreshToken == "" {
+		return fmt.Errorf("refresh token is required")
+	}
+	return nil
+}
+
+func (r *UpdateUserRequest) Validate() error {
+	if r.FullName != nil {
+		*r.FullName = strings.TrimSpace(*r.FullName)
+		if len(*r.FullName) < 3 {
+			return fmt.Errorf("full name must be at least 3 characters")
+		}
+	}
+	if r.Email != nil {
+		*r.Email = strings.TrimSpace(*r.Email)
+		addr, err := mail.ParseAddress(*r.Email)
+		if err != nil || addr.Address != *r.Email {
+			return fmt.Errorf("invalid email format")
+		}
+	}
+	return nil
+}
+
+func (r *AddPhoneRequest) Validate() error {
+	r.PhoneNumber = strings.TrimSpace(r.PhoneNumber)
+	return ValidatePhoneNumber(&r.PhoneNumber)
+}
+
+func (r *CreateWalletProxyRequest) Validate() error {
+	r.PhoneNumber = strings.TrimSpace(r.PhoneNumber)
+	if err := ValidatePhoneNumber(&r.PhoneNumber); err != nil {
+		return err
+	}
+	r.CurrencyCode = strings.TrimSpace(r.CurrencyCode)
+	r.CurrencyCode = strings.ToUpper(r.CurrencyCode)
+	if r.CurrencyCode != "EGP" {
+		return fmt.Errorf("unsupported currency code: only EGP is supported")
+	}
+	return nil
+}
+
+func (r *DeleteWalletRequest) Validate() error {
+	r.WalletID = strings.TrimSpace(r.WalletID)
+	if r.WalletID == "" {
+		return fmt.Errorf("wallet id is required")
 	}
 	return nil
 }

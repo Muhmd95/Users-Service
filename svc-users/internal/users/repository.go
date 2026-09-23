@@ -16,7 +16,9 @@ type Repository interface {
 	ReactivateUser(ctx context.Context, userID string, updates map[string]interface{}) error
 	AddPhoneNumber(ctx context.Context, userID string, phone string) error
 	RemovePhoneNumber(ctx context.Context, userID string, phone string) error
-	IncrementWalletCount(ctx context.Context, userID string, delta int) error
+	AddWalletID(ctx context.Context, userID string, walletID string) error
+	RemoveWalletIDIfOwns(ctx context.Context, userID string, walletID string) error
+	HasWallet(ctx context.Context, userID string, walletID string) (bool, error)
 
 	// --- Refresh Tokens Collection ---
 	StoreRefreshToken(ctx context.Context, token *RefreshToken) error

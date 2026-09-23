@@ -17,7 +17,7 @@ type User struct {
 	PhoneNumbers []string           `bson:"phone_numbers"` // multikey unique index
 	IsVerified   bool               `bson:"is_verified"`
 	Status       string             `bson:"status"` // ACTIVE | SUSPENDED | DELETED
-	WalletCount  int                `bson:"wallet_count"`
+	WalletIDs    []string           `bson:"wallet_ids"`
 	CreatedAt    time.Time          `bson:"created_at"`
 	UpdatedAt    time.Time          `bson:"updated_at"`
 }
@@ -53,4 +53,5 @@ var (
 	ErrTokenExpired        = errors.New("token has expired")
 	ErrTokenRevoked        = errors.New("refresh token has been revoked")
 	ErrPhoneHasWallet      = errors.New("cannot remove phone number associated with a wallet")
+	ErrWalletOwnership     = errors.New("forbidden: you do not own this wallet")
 )
