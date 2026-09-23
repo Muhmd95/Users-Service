@@ -280,27 +280,84 @@ func (r *mongoRepository) RemovePhoneNumber(ctx context.Context, userID string, 
 	return nil
 }
 
-func (r *mongoRepository) IncrementWalletCount(ctx context.Context, userID string, delta int) error {
+func (r *mongoRepository) AddWalletID(ctx context.Context, userID string, walletID string) error {
 	log := logger.Ctx(ctx)
 	objID, err := primitive.ObjectIDFromHex(userID)
 	if err != nil {
 		return users.ErrInvalidUserID
 	}
 	
+	filter := bson.M{
+		"_id": objID,
+		fmt.Sprintf("wallet_ids.%d", users.MaxWalletsPerUser-1): bson.M{"$exists": false},
+	}
+	
 	updateDoc := bson.M{
-		"$inc": bson.M{"wallet_count": delta},
+		"$addToSet": bson.M{"wallet_ids": walletID},
 		"$set": bson.M{"updated_at": time.Now()},
 	}
 	
-	result, err := r.usersColl.UpdateByID(ctx, objID, updateDoc)
+	result, err := r.usersColl.UpdateOne(ctx, filter, updateDoc)
 	if err != nil {
-		log.Error().Err(err).Msg("Failed to increment wallet count")
+		log.Error().Err(err).Msg("Failed to add wallet ID")
 		return err
 	}
 	if result.MatchedCount == 0 {
-		return users.ErrUserNotFound
+		count, _ := r.usersColl.CountDocuments(ctx, bson.M{"_id": objID})
+		if count == 0 {
+			return users.ErrUserNotFound
+		}
+		return users.ErrMaxWalletsReached
 	}
 	return nil
+}
+
+func (r *mongoRepository) RemoveWalletIDIfOwns(ctx context.Context, userID string, walletID string) error {
+	log := logger.Ctx(ctx)
+	objID, err := primitive.ObjectIDFromHex(userID)
+	if err != nil {
+		return users.ErrInvalidUserID
+	}
+	
+	filter := bson.M{
+		"_id":        objID,
+		"wallet_ids": walletID, // Only match if the walletID is actually in the array
+	}
+	
+	updateDoc := bson.M{
+		"$pull": bson.M{"wallet_ids": walletID},
+		"$set":  bson.M{"updated_at": time.Now()},
+	}
+	
+	result, err := r.usersColl.UpdateOne(ctx, filter, updateDoc)
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to remove wallet ID")
+		return err
+	}
+	
+	if result.ModifiedCount == 0 {
+		return users.ErrWalletOwnership
+	}
+	return nil
+}
+
+func (r *mongoRepository) HasWallet(ctx context.Context, userID string, walletID string) (bool, error) {
+	objID, err := primitive.ObjectIDFromHex(userID)
+	if err != nil {
+		return false, users.ErrInvalidUserID
+	}
+	
+	filter := bson.M{
+		"_id":        objID,
+		"wallet_ids": walletID,
+	}
+	
+	count, err := r.usersColl.CountDocuments(ctx, filter)
+	if err != nil {
+		return false, err
+	}
+	
+	return count > 0, nil
 }
 
 // --- Refresh Tokens Collection Methods ---
