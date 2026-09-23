@@ -1,0 +1,15 @@
+.git
+.github
+.vscode
+.idea
+.ENV
+.env
+Dockerfile
+docker-compose.yml
+docker-compose.*.yml
+README.md
+docs/
+tests/
+FlowCharts/
+tmp/
+vendor/
