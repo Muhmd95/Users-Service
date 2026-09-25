@@ -59,3 +59,18 @@ func (c *Client) AllowSlidingWindow(ctx context.Context, key string, limit int, 
 	count := countCmd.Val()
 	return count <= int64(limit), nil
 }
+
+// Set stores a key-value pair with an expiration time
+func (c *Client) Set(ctx context.Context, key string, value interface{}, expiration time.Duration) error {
+	return c.rdb.Set(ctx, key, value, expiration).Err()
+}
+
+// Get retrieves a value by key
+func (c *Client) Get(ctx context.Context, key string) (string, error) {
+	return c.rdb.Get(ctx, key).Result()
+}
+
+// Del deletes a key
+func (c *Client) Del(ctx context.Context, key string) error {
+	return c.rdb.Del(ctx, key).Err()
+}
