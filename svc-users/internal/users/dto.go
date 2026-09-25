@@ -69,6 +69,11 @@ type UpdateUserRequest struct {
 	Email    *string `json:"email,omitempty"`
 }
 
+type ChangePasswordRequest struct {
+	OldPassword string `json:"old_password"`
+	NewPassword string `json:"new_password"`
+}
+
 // --- Phone Management DTOs ---
 
 type AddPhoneRequest struct {
@@ -217,6 +222,16 @@ func (r *UpdateUserRequest) Validate() error {
 		if err != nil || addr.Address != *r.Email {
 			return fmt.Errorf("invalid email format")
 		}
+	}
+	return nil
+}
+
+func (r *ChangePasswordRequest) Validate() error {
+	if len(r.OldPassword) == 0 {
+		return fmt.Errorf("old password is required")
+	}
+	if len(r.NewPassword) < 8 {
+		return ErrInvalidPassword
 	}
 	return nil
 }

@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"go.opentelemetry.io/otel"
 	"strconv"
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"golang.org/x/crypto/bcrypt"
 
+	"svc-users/external/redis"
 	"svc-users/util/logger"
 	"svc-users/util/token"
 )
@@ -36,9 +38,10 @@ type Service struct {
 	tokenMaker           token.Maker
 	accessTokenDuration  time.Duration
 	refreshTokenDuration time.Duration
+	rdb                  *redis.Client
 }
 
-func NewService(repo Repository, walletClient WalletClient, emailJobs chan<- EmailJob, tokenMaker token.Maker, accessDuration, refreshDuration time.Duration) *Service {
+func NewService(repo Repository, walletClient WalletClient, emailJobs chan<- EmailJob, tokenMaker token.Maker, accessDuration, refreshDuration time.Duration, rdb *redis.Client) *Service {
 	return &Service{
 		repo:                 repo,
 		walletClient:         walletClient,
@@ -46,6 +49,7 @@ func NewService(repo Repository, walletClient WalletClient, emailJobs chan<- Ema
 		tokenMaker:           tokenMaker,
 		accessTokenDuration:  accessDuration,
 		refreshTokenDuration: refreshDuration,
+		rdb:                  rdb,
 	}
 }
 
@@ -68,7 +72,9 @@ func deriveBirthDate(nationalID string) time.Time {
 // ==========================================
 
 func (s *Service) RegisterUser(ctx context.Context, req *RegisterUserRequest) (*RegisterUserResponse, error) {
-	log := logger.Ctx(ctx)
+	ctx, span := otel.Tracer("users-service").Start(ctx, "RegisterUser")
+	defer span.End()
+	log := logger.Ctx(ctx).With().Str("layer", "service").Logger()
 
 	// Validate the request
 	if err := req.Validate(); err != nil {
@@ -100,9 +106,29 @@ func (s *Service) RegisterUser(ctx context.Context, req *RegisterUserRequest) (*
 
 	err = s.repo.CreateUser(ctx, user)
 	if err != nil {
-		// Handle re-registration logic here if needed (status=DELETED)
-		// For simplicity, we just pass the repo error up
-		return nil, err
+		if err == ErrDuplicateNationalID {
+			existingUser, fetchErr := s.repo.GetUserByNationalID(ctx, req.NationalID)
+			if fetchErr == nil && existingUser.Status == "DELETED" {
+				updates := map[string]interface{}{
+					"full_name":     req.FullName,
+					"email":         req.Email,
+					"password_hash": string(hashedPassword),
+					"phone_numbers": []string{req.PhoneNumber},
+					"is_verified":   false,
+					"wallet_ids":    []string{},
+				}
+				reactivateErr := s.repo.ReactivateUser(ctx, existingUser.ID.Hex(), updates)
+				if reactivateErr != nil {
+					return nil, reactivateErr
+				}
+				user.ID = existingUser.ID
+				err = nil
+			} else {
+				return nil, err
+			}
+		} else {
+			return nil, err
+		}
 	}
 
 	// Generate a verification token (for simplicity, using a UUID or objectID string)
@@ -126,16 +152,39 @@ func (s *Service) RegisterUser(ctx context.Context, req *RegisterUserRequest) (*
 }
 
 func (s *Service) VerifyEmail(ctx context.Context, req *VerifyEmailRequest) error {
+	ctx, span := otel.Tracer("users-service").Start(ctx, "VerifyEmail")
+	defer span.End()
 	if err := req.Validate(); err != nil {
 		return err
 	}
-	// In a real implementation, you'd validate the token against a database or cache.
-	// For this skeleton, we assume the token IS the user ID or we just mark them verified.
-	// We will skip full token mapping logic here and just assume we verified it successfully.
+
+	email, err := s.rdb.Get(ctx, "email_verify:"+req.Token)
+	if err != nil {
+		return errors.New("invalid or expired verification token")
+	}
+
+	user, err := s.repo.GetUserByEmail(ctx, email)
+	if err != nil {
+		return errors.New("user not found for this token")
+	}
+
+	_, err = s.repo.UpdateUser(ctx, user.ID.Hex(), map[string]interface{}{
+		"is_verified": true,
+		"updated_at":  time.Now(),
+	})
+	if err != nil {
+		return err
+	}
+
+	// Delete token after successful verification
+	_ = s.rdb.Del(ctx, "email_verify:"+req.Token)
+
 	return nil
 }
 
 func (s *Service) Login(ctx context.Context, req *LoginRequest) (*LoginResponse, error) {
+	ctx, span := otel.Tracer("users-service").Start(ctx, "Login")
+	defer span.End()
 	if err := req.Validate(); err != nil {
 		return nil, err
 	}
@@ -193,6 +242,8 @@ func (s *Service) Login(ctx context.Context, req *LoginRequest) (*LoginResponse,
 }
 
 func (s *Service) RefreshToken(ctx context.Context, req *RefreshTokenRequest) (*RefreshTokenResponse, error) {
+	ctx, span := otel.Tracer("users-service").Start(ctx, "RefreshToken")
+	defer span.End()
 	if err := req.Validate(); err != nil {
 		return nil, err
 	}
@@ -227,32 +278,36 @@ func (s *Service) RefreshToken(ctx context.Context, req *RefreshTokenRequest) (*
 }
 
 func (s *Service) Logout(ctx context.Context, userID string) error {
+	ctx, span := otel.Tracer("users-service").Start(ctx, "Logout")
+	defer span.End()
 	// For Phase 5 we will revoke the specific refresh token, but for now
 	// we will just revoke all tokens for this user.
 	return s.repo.RevokeAllUserTokens(ctx, userID)
 }
 
-func (s *Service) ChangePassword(ctx context.Context, userID string, oldPassword, newPassword string) error {
-	log := logger.Ctx(ctx)
+func (s *Service) ChangePassword(ctx context.Context, userID string, oldPassword, newPassword string) (*LoginResponse, error) {
+	ctx, span := otel.Tracer("users-service").Start(ctx, "ChangePassword")
+	defer span.End()
+	log := logger.Ctx(ctx).With().Str("layer", "service").Logger()
 
 	user, err := s.repo.GetUserByID(ctx, userID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	err = bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(oldPassword))
 	if err != nil {
-		return ErrInvalidCredentials
+		return nil, ErrInvalidCredentials
 	}
 
 	if len(newPassword) < 8 {
-		return ErrInvalidPassword
+		return nil, ErrInvalidPassword
 	}
 
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
 	if err != nil {
 		log.Error().Err(err).Msg("failed to hash password")
-		return fmt.Errorf("failed to process password")
+		return nil, fmt.Errorf("failed to process password")
 	}
 
 	updates := map[string]interface{}{
@@ -262,7 +317,7 @@ func (s *Service) ChangePassword(ctx context.Context, userID string, oldPassword
 
 	_, err = s.repo.UpdateUser(ctx, userID, updates)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	// Revoke ALL refresh tokens so all active sessions are logged out
@@ -270,7 +325,36 @@ func (s *Service) ChangePassword(ctx context.Context, userID string, oldPassword
 		log.Warn().Err(err).Str("user_id", userID).Msg("Failed to revoke tokens on password change")
 	}
 
-	return nil
+	// Generate Access Token
+	accessToken, _, err := s.tokenMaker.CreateToken(user.ID.Hex(), s.accessTokenDuration)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create access token: %w", err)
+	}
+
+	// Generate Refresh Token
+	refreshToken, refreshPayload, err := s.tokenMaker.CreateToken(user.ID.Hex(), s.refreshTokenDuration)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create refresh token: %w", err)
+	}
+
+	// Store Refresh Token in DB
+	rt := &RefreshToken{
+		UserID:    user.ID,
+		TokenHash: refreshToken,
+		Revoked:   false,
+		ExpiresAt: refreshPayload.ExpiredAt,
+		CreatedAt: time.Now(),
+	}
+	if err := s.repo.StoreRefreshToken(ctx, rt); err != nil {
+		return nil, fmt.Errorf("failed to store refresh token: %w", err)
+	}
+
+	return &LoginResponse{
+		UserID:       user.ID.Hex(),
+		AccessToken:  accessToken,
+		RefreshToken: refreshToken,
+		ExpiresIn:    int64(s.accessTokenDuration.Seconds()),
+	}, nil
 }
 
 // ==========================================
@@ -278,6 +362,8 @@ func (s *Service) ChangePassword(ctx context.Context, userID string, oldPassword
 // ==========================================
 
 func (s *Service) GetUser(ctx context.Context, userID string) (*GetUserResponse, error) {
+	ctx, span := otel.Tracer("users-service").Start(ctx, "GetUser")
+	defer span.End()
 	user, err := s.repo.GetUserByID(ctx, userID)
 	if err != nil {
 		return nil, err
@@ -302,6 +388,8 @@ func (s *Service) GetUser(ctx context.Context, userID string) (*GetUserResponse,
 }
 
 func (s *Service) UpdateUser(ctx context.Context, userID string, req *UpdateUserRequest) (*GetUserResponse, error) {
+	ctx, span := otel.Tracer("users-service").Start(ctx, "UpdateUser")
+	defer span.End()
 	if err := req.Validate(); err != nil {
 		return nil, err
 	}
@@ -334,7 +422,9 @@ func (s *Service) UpdateUser(ctx context.Context, userID string, req *UpdateUser
 }
 
 func (s *Service) SoftDeleteUser(ctx context.Context, userID string) error {
-	log := logger.Ctx(ctx)
+	ctx, span := otel.Tracer("users-service").Start(ctx, "SoftDeleteUser")
+	defer span.End()
+	log := logger.Ctx(ctx).With().Str("layer", "service").Logger()
 
 	// 1. Soft delete the user
 	if err := s.repo.SoftDeleteUser(ctx, userID); err != nil {
@@ -361,6 +451,8 @@ func (s *Service) SoftDeleteUser(ctx context.Context, userID string) error {
 // ==========================================
 
 func (s *Service) AddPhoneNumber(ctx context.Context, userID string, phone string) error {
+	ctx, span := otel.Tracer("users-service").Start(ctx, "AddPhoneNumber")
+	defer span.End()
 	if err := ValidatePhoneNumber(&phone); err != nil {
 		return err
 	}
@@ -375,6 +467,8 @@ func (s *Service) AddPhoneNumber(ctx context.Context, userID string, phone strin
 }
 
 func (s *Service) RemovePhoneNumber(ctx context.Context, userID string, phone string) error {
+	ctx, span := otel.Tracer("users-service").Start(ctx, "RemovePhoneNumber")
+	defer span.End()
 	if err := ValidatePhoneNumber(&phone); err != nil {
 		return err
 	}
@@ -408,10 +502,12 @@ func (s *Service) RemovePhoneNumber(ctx context.Context, userID string, phone st
 // ==========================================
 
 func (s *Service) CreateWallet(ctx context.Context, userID string, req *CreateWalletProxyRequest) (*CreateWalletProxyResponse, error) {
+	ctx, span := otel.Tracer("users-service").Start(ctx, "CreateWallet")
+	defer span.End()
 	if err := req.Validate(); err != nil {
 		return nil, err
 	}
-	log := logger.Ctx(ctx)
+	log := logger.Ctx(ctx).With().Str("layer", "service").Logger()
 	user, err := s.repo.GetUserByID(ctx, userID)
 	if err != nil {
 		return nil, err
@@ -442,6 +538,7 @@ func (s *Service) CreateWallet(ctx context.Context, userID string, req *CreateWa
 		return nil, err
 	}
 
+	// 4. Update local state: add the newly created wallet ID to the user's denormalized array in MongoDB.
 	if err := s.repo.AddWalletID(ctx, userID, resp.WalletID); err != nil {
 		log.Error().Err(err).Msg("Failed to add wallet ID to user document after creation")
 	}
@@ -450,6 +547,8 @@ func (s *Service) CreateWallet(ctx context.Context, userID string, req *CreateWa
 }
 
 func (s *Service) DeleteWallet(ctx context.Context, userID string, req *DeleteWalletRequest) error {
+	ctx, span := otel.Tracer("users-service").Start(ctx, "DeleteWallet")
+	defer span.End()
 	if err := req.Validate(); err != nil {
 		return err
 	}
@@ -457,15 +556,16 @@ func (s *Service) DeleteWallet(ctx context.Context, userID string, req *DeleteWa
 		return errors.New("wallet client not configured")
 	}
 
-	// 1. Remove the wallet ID from MongoDB first (using filtering for ownership)
+	// 1. One-Trip Check & Delete: Remove the wallet ID from the user's denormalized array in MongoDB.
+	// We use filtering {"_id": userID, "wallet_ids": req.WalletID} so it only succeeds if the user actually owns the wallet.
 	err := s.repo.RemoveWalletIDIfOwns(ctx, userID, req.WalletID)
 	if err != nil {
 		return err
 	}
 
-	// 2. Perform gRPC call
+	// 2. Perform gRPC call to actual Wallet Service
 	if err := s.walletClient.DeleteWallet(ctx, req); err != nil {
-		// Rollback on failure
+		// 3. Saga Rollback: If the Wallet Service failed to delete it, we must revert the local state by putting the ID back.
 		_ = s.repo.AddWalletID(ctx, userID, req.WalletID)
 		return err
 	}
@@ -474,6 +574,8 @@ func (s *Service) DeleteWallet(ctx context.Context, userID string, req *DeleteWa
 }
 
 func (s *Service) GetUserWallets(ctx context.Context, userID string) (*GetUserWalletsResponse, error) {
+	ctx, span := otel.Tracer("users-service").Start(ctx, "GetUserWallets")
+	defer span.End()
 	if s.walletClient == nil {
 		return nil, errors.New("wallet client not configured")
 	}
@@ -481,10 +583,14 @@ func (s *Service) GetUserWallets(ctx context.Context, userID string) (*GetUserWa
 }
 
 func (s *Service) GetWalletBalance(ctx context.Context, userID string, walletID string) (*GetWalletBalanceProxyResponse, error) {
+	ctx, span := otel.Tracer("users-service").Start(ctx, "GetWalletBalance")
+	defer span.End()
 	if s.walletClient == nil {
 		return nil, errors.New("wallet client not configured")
 	}
 
+	// 1. Security check: Instantly verify ownership using the user's local denormalized wallet_ids array.
+	// This completely avoids sending a redundant gRPC round-trip to the Wallet Service just for authorization.
 	ownsWallet, err := s.repo.HasWallet(ctx, userID, walletID)
 	if err != nil {
 		return nil, errors.New("failed to verify wallet ownership")
@@ -493,5 +599,6 @@ func (s *Service) GetWalletBalance(ctx context.Context, userID string, walletID 
 		return nil, ErrWalletOwnership
 	}
 
+	// 2. Forward the balance request safely.
 	return s.walletClient.GetWalletBalance(ctx, walletID)
 }
