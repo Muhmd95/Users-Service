@@ -3,6 +3,8 @@ package mongodb
 import (
 	"context"
 	"fmt"
+	"go.opentelemetry.io/otel"
+	"strings"
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
@@ -20,7 +22,7 @@ type mongoRepository struct {
 }
 
 func NewUsersRepository(ctx context.Context, db *mongo.Database) (users.Repository, error) {
-	log := logger.Ctx(ctx)
+	log := logger.Ctx(ctx).With().Str("layer", "repository").Logger()
 	usersColl := db.Collection("users")
 	tokensColl := db.Collection("refresh_tokens")
 
@@ -77,11 +79,22 @@ func NewUsersRepository(ctx context.Context, db *mongo.Database) (users.Reposito
 // --- Users Collection Methods ---
 
 func (r *mongoRepository) CreateUser(ctx context.Context, user *users.User) error {
-	log := logger.Ctx(ctx)
+	ctx, span := otel.Tracer("users-repo").Start(ctx, "CreateUser")
+	defer span.End()
+	log := logger.Ctx(ctx).With().Str("layer", "repository").Logger()
 	result, err := r.usersColl.InsertOne(ctx, user)
 	if err != nil {
 		if mongo.IsDuplicateKeyError(err) {
-			return err // Return raw error so service can check which unique index failed
+			if strings.Contains(err.Error(), "unique_national_id") {
+				return users.ErrDuplicateNationalID
+			}
+			if strings.Contains(err.Error(), "unique_email") {
+				return users.ErrDuplicateEmail
+			}
+			if strings.Contains(err.Error(), "unique_phone_numbers") {
+				return users.ErrDuplicatePhone
+			}
+			return err
 		}
 		log.Error().Err(err).Msg("Failed to insert user")
 		return err
@@ -91,7 +104,9 @@ func (r *mongoRepository) CreateUser(ctx context.Context, user *users.User) erro
 }
 
 func (r *mongoRepository) GetUserByID(ctx context.Context, userID string) (*users.User, error) {
-	log := logger.Ctx(ctx)
+	ctx, span := otel.Tracer("users-repo").Start(ctx, "GetUserByID")
+	defer span.End()
+	log := logger.Ctx(ctx).With().Str("layer", "repository").Logger()
 	objID, err := primitive.ObjectIDFromHex(userID)
 	if err != nil {
 		return nil, users.ErrInvalidUserID
@@ -109,7 +124,9 @@ func (r *mongoRepository) GetUserByID(ctx context.Context, userID string) (*user
 }
 
 func (r *mongoRepository) GetUserByPhoneNumber(ctx context.Context, phoneNumber string) (*users.User, error) {
-	log := logger.Ctx(ctx)
+	ctx, span := otel.Tracer("users-repo").Start(ctx, "GetUserByPhoneNumber")
+	defer span.End()
+	log := logger.Ctx(ctx).With().Str("layer", "repository").Logger()
 	var u users.User
 	err := r.usersColl.FindOne(ctx, bson.M{"phone_numbers": phoneNumber}).Decode(&u)
 	if err != nil {
@@ -123,7 +140,9 @@ func (r *mongoRepository) GetUserByPhoneNumber(ctx context.Context, phoneNumber 
 }
 
 func (r *mongoRepository) GetUserByEmail(ctx context.Context, email string) (*users.User, error) {
-	log := logger.Ctx(ctx)
+	ctx, span := otel.Tracer("users-repo").Start(ctx, "GetUserByEmail")
+	defer span.End()
+	log := logger.Ctx(ctx).With().Str("layer", "repository").Logger()
 	var u users.User
 	err := r.usersColl.FindOne(ctx, bson.M{"email": email}).Decode(&u)
 	if err != nil {
@@ -137,7 +156,9 @@ func (r *mongoRepository) GetUserByEmail(ctx context.Context, email string) (*us
 }
 
 func (r *mongoRepository) GetUserByNationalID(ctx context.Context, nationalID string) (*users.User, error) {
-	log := logger.Ctx(ctx)
+	ctx, span := otel.Tracer("users-repo").Start(ctx, "GetUserByNationalID")
+	defer span.End()
+	log := logger.Ctx(ctx).With().Str("layer", "repository").Logger()
 	var u users.User
 	err := r.usersColl.FindOne(ctx, bson.M{"national_id": nationalID}).Decode(&u)
 	if err != nil {
@@ -151,21 +172,35 @@ func (r *mongoRepository) GetUserByNationalID(ctx context.Context, nationalID st
 }
 
 func (r *mongoRepository) UpdateUser(ctx context.Context, userID string, updates map[string]interface{}) (*users.User, error) {
-	log := logger.Ctx(ctx)
+	ctx, span := otel.Tracer("users-repo").Start(ctx, "UpdateUser")
+	defer span.End()
+	log := logger.Ctx(ctx).With().Str("layer", "repository").Logger()
 	objID, err := primitive.ObjectIDFromHex(userID)
 	if err != nil {
 		return nil, users.ErrInvalidUserID
 	}
-	
+
 	updates["updated_at"] = time.Now()
 	updateDoc := bson.M{"$set": updates}
 	opts := options.FindOneAndUpdate().SetReturnDocument(options.After)
-	
+
 	var u users.User
 	err = r.usersColl.FindOneAndUpdate(ctx, bson.M{"_id": objID}, updateDoc, opts).Decode(&u)
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
 			return nil, users.ErrUserNotFound
+		}
+		if mongo.IsDuplicateKeyError(err) {
+			if strings.Contains(err.Error(), "unique_national_id") {
+				return nil, users.ErrDuplicateNationalID
+			}
+			if strings.Contains(err.Error(), "unique_email") {
+				return nil, users.ErrDuplicateEmail
+			}
+			if strings.Contains(err.Error(), "unique_phone_numbers") {
+				return nil, users.ErrDuplicatePhone
+			}
+			return nil, err
 		}
 		log.Error().Err(err).Msg("Failed to update user")
 		return nil, err
@@ -174,19 +209,21 @@ func (r *mongoRepository) UpdateUser(ctx context.Context, userID string, updates
 }
 
 func (r *mongoRepository) SoftDeleteUser(ctx context.Context, userID string) error {
-	log := logger.Ctx(ctx)
+	ctx, span := otel.Tracer("users-repo").Start(ctx, "SoftDeleteUser")
+	defer span.End()
+	log := logger.Ctx(ctx).With().Str("layer", "repository").Logger()
 	objID, err := primitive.ObjectIDFromHex(userID)
 	if err != nil {
 		return users.ErrInvalidUserID
 	}
-	
+
 	updateDoc := bson.M{
 		"$set": bson.M{
-			"status": "DELETED",
+			"status":     "DELETED",
 			"updated_at": time.Now(),
 		},
 	}
-	
+
 	result, err := r.usersColl.UpdateByID(ctx, objID, updateDoc)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to soft delete user")
@@ -199,18 +236,32 @@ func (r *mongoRepository) SoftDeleteUser(ctx context.Context, userID string) err
 }
 
 func (r *mongoRepository) ReactivateUser(ctx context.Context, userID string, updates map[string]interface{}) error {
-	log := logger.Ctx(ctx)
+	ctx, span := otel.Tracer("users-repo").Start(ctx, "ReactivateUser")
+	defer span.End()
+	log := logger.Ctx(ctx).With().Str("layer", "repository").Logger()
 	objID, err := primitive.ObjectIDFromHex(userID)
 	if err != nil {
 		return users.ErrInvalidUserID
 	}
-	
+
 	updates["status"] = "ACTIVE"
 	updates["updated_at"] = time.Now()
-	
+
 	updateDoc := bson.M{"$set": updates}
 	result, err := r.usersColl.UpdateByID(ctx, objID, updateDoc)
 	if err != nil {
+		if mongo.IsDuplicateKeyError(err) {
+			if strings.Contains(err.Error(), "unique_national_id") {
+				return users.ErrDuplicateNationalID
+			}
+			if strings.Contains(err.Error(), "unique_email") {
+				return users.ErrDuplicateEmail
+			}
+			if strings.Contains(err.Error(), "unique_phone_numbers") {
+				return users.ErrDuplicatePhone
+			}
+			return err
+		}
 		log.Error().Err(err).Msg("Failed to reactivate user")
 		return err
 	}
@@ -221,23 +272,25 @@ func (r *mongoRepository) ReactivateUser(ctx context.Context, userID string, upd
 }
 
 func (r *mongoRepository) AddPhoneNumber(ctx context.Context, userID string, phone string) error {
-	log := logger.Ctx(ctx)
+	ctx, span := otel.Tracer("users-repo").Start(ctx, "AddPhoneNumber")
+	defer span.End()
+	log := logger.Ctx(ctx).With().Str("layer", "repository").Logger()
 	objID, err := primitive.ObjectIDFromHex(userID)
 	if err != nil {
 		return users.ErrInvalidUserID
 	}
-	
+
 	// Enforce max phones limit at the DB layer: only match if the (MaxPhonesPerUser-1)th element does not exist.
 	filter := bson.M{
 		"_id": objID,
 		fmt.Sprintf("phone_numbers.%d", users.MaxPhonesPerUser-1): bson.M{"$exists": false},
 	}
-	
+
 	updateDoc := bson.M{
 		"$addToSet": bson.M{"phone_numbers": phone},
-		"$set": bson.M{"updated_at": time.Now()},
+		"$set":      bson.M{"updated_at": time.Now()},
 	}
-	
+
 	result, err := r.usersColl.UpdateOne(ctx, filter, updateDoc)
 	if err != nil {
 		if mongo.IsDuplicateKeyError(err) {
@@ -258,17 +311,19 @@ func (r *mongoRepository) AddPhoneNumber(ctx context.Context, userID string, pho
 }
 
 func (r *mongoRepository) RemovePhoneNumber(ctx context.Context, userID string, phone string) error {
-	log := logger.Ctx(ctx)
+	ctx, span := otel.Tracer("users-repo").Start(ctx, "RemovePhoneNumber")
+	defer span.End()
+	log := logger.Ctx(ctx).With().Str("layer", "repository").Logger()
 	objID, err := primitive.ObjectIDFromHex(userID)
 	if err != nil {
 		return users.ErrInvalidUserID
 	}
-	
+
 	updateDoc := bson.M{
 		"$pull": bson.M{"phone_numbers": phone},
-		"$set": bson.M{"updated_at": time.Now()},
+		"$set":  bson.M{"updated_at": time.Now()},
 	}
-	
+
 	result, err := r.usersColl.UpdateByID(ctx, objID, updateDoc)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to remove phone number")
@@ -281,22 +336,24 @@ func (r *mongoRepository) RemovePhoneNumber(ctx context.Context, userID string, 
 }
 
 func (r *mongoRepository) AddWalletID(ctx context.Context, userID string, walletID string) error {
-	log := logger.Ctx(ctx)
+	ctx, span := otel.Tracer("users-repo").Start(ctx, "AddWalletID")
+	defer span.End()
+	log := logger.Ctx(ctx).With().Str("layer", "repository").Logger()
 	objID, err := primitive.ObjectIDFromHex(userID)
 	if err != nil {
 		return users.ErrInvalidUserID
 	}
-	
+
 	filter := bson.M{
 		"_id": objID,
 		fmt.Sprintf("wallet_ids.%d", users.MaxWalletsPerUser-1): bson.M{"$exists": false},
 	}
-	
+
 	updateDoc := bson.M{
 		"$addToSet": bson.M{"wallet_ids": walletID},
-		"$set": bson.M{"updated_at": time.Now()},
+		"$set":      bson.M{"updated_at": time.Now()},
 	}
-	
+
 	result, err := r.usersColl.UpdateOne(ctx, filter, updateDoc)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to add wallet ID")
@@ -313,28 +370,30 @@ func (r *mongoRepository) AddWalletID(ctx context.Context, userID string, wallet
 }
 
 func (r *mongoRepository) RemoveWalletIDIfOwns(ctx context.Context, userID string, walletID string) error {
-	log := logger.Ctx(ctx)
+	ctx, span := otel.Tracer("users-repo").Start(ctx, "RemoveWalletIDIfOwns")
+	defer span.End()
+	log := logger.Ctx(ctx).With().Str("layer", "repository").Logger()
 	objID, err := primitive.ObjectIDFromHex(userID)
 	if err != nil {
 		return users.ErrInvalidUserID
 	}
-	
+
 	filter := bson.M{
 		"_id":        objID,
 		"wallet_ids": walletID, // Only match if the walletID is actually in the array
 	}
-	
+
 	updateDoc := bson.M{
 		"$pull": bson.M{"wallet_ids": walletID},
 		"$set":  bson.M{"updated_at": time.Now()},
 	}
-	
+
 	result, err := r.usersColl.UpdateOne(ctx, filter, updateDoc)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to remove wallet ID")
 		return err
 	}
-	
+
 	if result.ModifiedCount == 0 {
 		return users.ErrWalletOwnership
 	}
@@ -342,28 +401,32 @@ func (r *mongoRepository) RemoveWalletIDIfOwns(ctx context.Context, userID strin
 }
 
 func (r *mongoRepository) HasWallet(ctx context.Context, userID string, walletID string) (bool, error) {
+	ctx, span := otel.Tracer("users-repo").Start(ctx, "HasWallet")
+	defer span.End()
 	objID, err := primitive.ObjectIDFromHex(userID)
 	if err != nil {
 		return false, users.ErrInvalidUserID
 	}
-	
+
 	filter := bson.M{
 		"_id":        objID,
 		"wallet_ids": walletID,
 	}
-	
+
 	count, err := r.usersColl.CountDocuments(ctx, filter)
 	if err != nil {
 		return false, err
 	}
-	
+
 	return count > 0, nil
 }
 
 // --- Refresh Tokens Collection Methods ---
 
 func (r *mongoRepository) StoreRefreshToken(ctx context.Context, token *users.RefreshToken) error {
-	log := logger.Ctx(ctx)
+	ctx, span := otel.Tracer("users-repo").Start(ctx, "StoreRefreshToken")
+	defer span.End()
+	log := logger.Ctx(ctx).With().Str("layer", "repository").Logger()
 	result, err := r.tokensColl.InsertOne(ctx, token)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to store refresh token")
@@ -374,7 +437,9 @@ func (r *mongoRepository) StoreRefreshToken(ctx context.Context, token *users.Re
 }
 
 func (r *mongoRepository) GetRefreshToken(ctx context.Context, tokenHash string) (*users.RefreshToken, error) {
-	log := logger.Ctx(ctx)
+	ctx, span := otel.Tracer("users-repo").Start(ctx, "GetRefreshToken")
+	defer span.End()
+	log := logger.Ctx(ctx).With().Str("layer", "repository").Logger()
 	var t users.RefreshToken
 	err := r.tokensColl.FindOne(ctx, bson.M{"token_hash": tokenHash}).Decode(&t)
 	if err != nil {
@@ -388,7 +453,9 @@ func (r *mongoRepository) GetRefreshToken(ctx context.Context, tokenHash string)
 }
 
 func (r *mongoRepository) RevokeRefreshToken(ctx context.Context, tokenHash string) error {
-	log := logger.Ctx(ctx)
+	ctx, span := otel.Tracer("users-repo").Start(ctx, "RevokeRefreshToken")
+	defer span.End()
+	log := logger.Ctx(ctx).With().Str("layer", "repository").Logger()
 	updateDoc := bson.M{"$set": bson.M{"revoked": true}}
 	result, err := r.tokensColl.UpdateOne(ctx, bson.M{"token_hash": tokenHash}, updateDoc)
 	if err != nil {
@@ -402,12 +469,14 @@ func (r *mongoRepository) RevokeRefreshToken(ctx context.Context, tokenHash stri
 }
 
 func (r *mongoRepository) RevokeAllUserTokens(ctx context.Context, userID string) error {
-	log := logger.Ctx(ctx)
+	ctx, span := otel.Tracer("users-repo").Start(ctx, "RevokeAllUserTokens")
+	defer span.End()
+	log := logger.Ctx(ctx).With().Str("layer", "repository").Logger()
 	objID, err := primitive.ObjectIDFromHex(userID)
 	if err != nil {
 		return users.ErrInvalidUserID
 	}
-	
+
 	updateDoc := bson.M{"$set": bson.M{"revoked": true}}
 	_, err = r.tokensColl.UpdateMany(ctx, bson.M{"user_id": objID}, updateDoc)
 	if err != nil {
