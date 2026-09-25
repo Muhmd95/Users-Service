@@ -65,7 +65,7 @@ func RequestLogger(next http.Handler) http.Handler {
 		next.ServeHTTP(recorder, r)
 
 		duration := time.Since(start)
-		log := logger.Ctx(r.Context())
+		log := logger.Ctx(r.Context()).With().Str("layer", "api").Logger()
 
 		// Extract user_id from context if set by auth middleware
 		userID := ""
@@ -170,7 +170,8 @@ func RateLimiterMiddleware(redisClient *redis.Client, limit int, window time.Dur
 			allowed, err := redisClient.AllowSlidingWindow(r.Context(), key, limit, window)
 			if err != nil {
 				// If Redis fails, log it but let the request through to avoid cascading failure
-				logger.Ctx(r.Context()).Error().Err(err).Msg("Rate limiter redis check failed")
+				log := logger.Ctx(r.Context())
+				log.Error().Err(err).Str("layer", "api").Msg("Rate limiter redis check failed")
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -244,7 +245,7 @@ func OwnershipMiddleware(targetUserIDParam func(r *http.Request) string) func(ht
 			}
 
 			targetUserID := targetUserIDParam(r)
-			
+
 			// If the target is "me", it conceptually matches the auth user.
 			if targetUserID != "me" && targetUserID != authUserID {
 				w.Header().Set("Content-Type", "application/json")

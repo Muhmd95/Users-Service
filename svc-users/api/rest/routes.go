@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	
+
 	"svc-users/external/redis"
 	"svc-users/util/token"
 )
@@ -15,14 +15,14 @@ func NewRouter(c *Controller, rdb *redis.Client, tokenMaker token.Maker) *http.S
 
 	// 1. Core middlewares (Logger + Metrics)
 	// We'll wrap the final mux with these when returning
-	
+
 	// 2. Middlewares
 	authMid := AuthMiddleware(tokenMaker)
-	rateLimiter := RateLimiterMiddleware(rdb, 60, 1*time.Minute) // 60 req/min general limit
+	rateLimiter := RateLimiterMiddleware(rdb, 60, 1*time.Minute)       // 60 req/min general limit
 	strictRateLimiter := RateLimiterMiddleware(rdb, 10, 1*time.Minute) // 10 req/min for auth
 
 	// --- Unprotected Routes (Auth) ---
-	
+
 	// We wrap unprotected routes with the strict rate limiter
 	mux.Handle("POST /v1/users/register", strictRateLimiter(http.HandlerFunc(c.Register)))
 	mux.Handle("GET /v1/users/verify-email", strictRateLimiter(http.HandlerFunc(c.VerifyEmail)))
@@ -30,7 +30,7 @@ func NewRouter(c *Controller, rdb *redis.Client, tokenMaker token.Maker) *http.S
 	mux.Handle("POST /v1/users/refresh", strictRateLimiter(http.HandlerFunc(c.RefreshToken)))
 
 	// --- Protected Routes ---
-	
+
 	// We chain Auth -> Rate Limiter -> Handler
 	protected := func(h http.HandlerFunc) http.Handler {
 		return authMid(rateLimiter(h))
@@ -40,7 +40,7 @@ func NewRouter(c *Controller, rdb *redis.Client, tokenMaker token.Maker) *http.S
 	mux.Handle("GET /v1/users/me", protected(c.GetMe))
 	mux.Handle("PUT /v1/users/me", protected(c.UpdateMe))
 	mux.Handle("DELETE /v1/users/me", protected(c.DeleteMe))
-	
+
 	// Security
 	mux.Handle("POST /v1/users/logout", protected(c.Logout))
 	mux.Handle("PUT /v1/users/me/password", protected(c.ChangePassword))

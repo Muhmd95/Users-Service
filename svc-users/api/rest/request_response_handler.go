@@ -2,6 +2,7 @@ package rest
 
 import (
 	"encoding/json"
+	"go.opentelemetry.io/otel"
 	"net/http"
 
 	"svc-users/internal/users"
@@ -22,6 +23,27 @@ func respondError(w http.ResponseWriter, status int, message string) {
 	respondJSON(w, status, map[string]string{"error": message})
 }
 
+// handleError maps known domain errors to safe HTTP responses and hides internal server errors
+func handleError(w http.ResponseWriter, err error) {
+	switch err {
+	case users.ErrUserNotFound, users.ErrInvalidUserID:
+		respondError(w, http.StatusNotFound, err.Error())
+	case users.ErrDuplicatePhone, users.ErrDuplicateNationalID, users.ErrDuplicateEmail,
+		users.ErrInvalidPhoneNumber, users.ErrInvalidNationalID, users.ErrInvalidPassword,
+		users.ErrMaxWalletsReached, users.ErrMaxPhonesReached, users.ErrPhoneHasWallet:
+		respondError(w, http.StatusBadRequest, err.Error())
+	case users.ErrInvalidCredentials, users.ErrUserSuspended, users.ErrUserDeleted,
+		users.ErrEmailNotVerified, users.ErrInvalidToken, users.ErrTokenExpired, users.ErrTokenRevoked:
+		respondError(w, http.StatusUnauthorized, err.Error())
+	case users.ErrWalletOwnership:
+		respondError(w, http.StatusForbidden, err.Error())
+	default:
+		// Mask raw/internal errors
+		logger.Log.Error().Err(err).Str("layer", "api").Msg("Internal server error exposed to API")
+		respondError(w, http.StatusInternalServerError, "internal server error")
+	}
+}
+
 // helper to extract user id from context
 func getUserID(r *http.Request) string {
 	uid, _ := r.Context().Value(UserIDContextKey).(string)
@@ -33,6 +55,9 @@ func getUserID(r *http.Request) string {
 // ==========================================
 
 func (c *Controller) Register(w http.ResponseWriter, r *http.Request) {
+	ctx, span := otel.Tracer("users-api").Start(r.Context(), "Register")
+	defer span.End()
+	r = r.WithContext(ctx)
 	var req users.RegisterUserRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		respondError(w, http.StatusBadRequest, "invalid request payload")
@@ -41,14 +66,16 @@ func (c *Controller) Register(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := c.svc.RegisterUser(r.Context(), &req)
 	if err != nil {
-		logger.Ctx(r.Context()).Warn().Err(err).Msg("Registration failed")
-		respondError(w, http.StatusBadRequest, err.Error())
+		handleError(w, err)
 		return
 	}
 	respondJSON(w, http.StatusCreated, resp)
 }
 
 func (c *Controller) VerifyEmail(w http.ResponseWriter, r *http.Request) {
+	ctx, span := otel.Tracer("users-api").Start(r.Context(), "VerifyEmail")
+	defer span.End()
+	r = r.WithContext(ctx)
 	token := r.URL.Query().Get("token")
 	if token == "" {
 		respondError(w, http.StatusBadRequest, "token query parameter is required")
@@ -57,7 +84,7 @@ func (c *Controller) VerifyEmail(w http.ResponseWriter, r *http.Request) {
 
 	req := &users.VerifyEmailRequest{Token: token}
 	if err := c.svc.VerifyEmail(r.Context(), req); err != nil {
-		respondError(w, http.StatusBadRequest, err.Error())
+		handleError(w, err)
 		return
 	}
 
@@ -65,6 +92,9 @@ func (c *Controller) VerifyEmail(w http.ResponseWriter, r *http.Request) {
 }
 
 func (c *Controller) Login(w http.ResponseWriter, r *http.Request) {
+	ctx, span := otel.Tracer("users-api").Start(r.Context(), "Login")
+	defer span.End()
+	r = r.WithContext(ctx)
 	var req users.LoginRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		respondError(w, http.StatusBadRequest, "invalid request payload")
@@ -73,7 +103,7 @@ func (c *Controller) Login(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := c.svc.Login(r.Context(), &req)
 	if err != nil {
-		respondError(w, http.StatusUnauthorized, err.Error())
+		handleError(w, err)
 		return
 	}
 
@@ -81,6 +111,9 @@ func (c *Controller) Login(w http.ResponseWriter, r *http.Request) {
 }
 
 func (c *Controller) RefreshToken(w http.ResponseWriter, r *http.Request) {
+	ctx, span := otel.Tracer("users-api").Start(r.Context(), "RefreshToken")
+	defer span.End()
+	r = r.WithContext(ctx)
 	var req users.RefreshTokenRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		respondError(w, http.StatusBadRequest, "invalid request payload")
@@ -89,7 +122,7 @@ func (c *Controller) RefreshToken(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := c.svc.RefreshToken(r.Context(), &req)
 	if err != nil {
-		respondError(w, http.StatusUnauthorized, err.Error())
+		handleError(w, err)
 		return
 	}
 
@@ -97,31 +130,39 @@ func (c *Controller) RefreshToken(w http.ResponseWriter, r *http.Request) {
 }
 
 func (c *Controller) Logout(w http.ResponseWriter, r *http.Request) {
+	ctx, span := otel.Tracer("users-api").Start(r.Context(), "Logout")
+	defer span.End()
+	r = r.WithContext(ctx)
 	userID := getUserID(r)
 	if err := c.svc.Logout(r.Context(), userID); err != nil {
-		respondError(w, http.StatusInternalServerError, "failed to logout")
+		handleError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
 func (c *Controller) ChangePassword(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		OldPassword string `json:"old_password"`
-		NewPassword string `json:"new_password"`
-	}
+	ctx, span := otel.Tracer("users-api").Start(r.Context(), "ChangePassword")
+	defer span.End()
+	r = r.WithContext(ctx)
+	var req users.ChangePasswordRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		respondError(w, http.StatusBadRequest, "invalid request payload")
 		return
 	}
-
-	userID := getUserID(r)
-	if err := c.svc.ChangePassword(r.Context(), userID, req.OldPassword, req.NewPassword); err != nil {
-		respondError(w, http.StatusBadRequest, err.Error())
+	if err := req.Validate(); err != nil {
+		handleError(w, err)
 		return
 	}
 
-	respondJSON(w, http.StatusOK, map[string]string{"message": "password changed successfully, all sessions logged out"})
+	userID := getUserID(r)
+	resp, err := c.svc.ChangePassword(r.Context(), userID, req.OldPassword, req.NewPassword)
+	if err != nil {
+		handleError(w, err)
+		return
+	}
+
+	respondJSON(w, http.StatusOK, resp)
 }
 
 // ==========================================
@@ -129,16 +170,22 @@ func (c *Controller) ChangePassword(w http.ResponseWriter, r *http.Request) {
 // ==========================================
 
 func (c *Controller) GetMe(w http.ResponseWriter, r *http.Request) {
+	ctx, span := otel.Tracer("users-api").Start(r.Context(), "GetMe")
+	defer span.End()
+	r = r.WithContext(ctx)
 	userID := getUserID(r)
 	resp, err := c.svc.GetUser(r.Context(), userID)
 	if err != nil {
-		respondError(w, http.StatusNotFound, err.Error())
+		handleError(w, err)
 		return
 	}
 	respondJSON(w, http.StatusOK, resp)
 }
 
 func (c *Controller) UpdateMe(w http.ResponseWriter, r *http.Request) {
+	ctx, span := otel.Tracer("users-api").Start(r.Context(), "UpdateMe")
+	defer span.End()
+	r = r.WithContext(ctx)
 	var req users.UpdateUserRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		respondError(w, http.StatusBadRequest, "invalid request payload")
@@ -148,16 +195,19 @@ func (c *Controller) UpdateMe(w http.ResponseWriter, r *http.Request) {
 	userID := getUserID(r)
 	resp, err := c.svc.UpdateUser(r.Context(), userID, &req)
 	if err != nil {
-		respondError(w, http.StatusBadRequest, err.Error())
+		handleError(w, err)
 		return
 	}
 	respondJSON(w, http.StatusOK, resp)
 }
 
 func (c *Controller) DeleteMe(w http.ResponseWriter, r *http.Request) {
+	ctx, span := otel.Tracer("users-api").Start(r.Context(), "DeleteMe")
+	defer span.End()
+	r = r.WithContext(ctx)
 	userID := getUserID(r)
 	if err := c.svc.SoftDeleteUser(r.Context(), userID); err != nil {
-		respondError(w, http.StatusInternalServerError, err.Error())
+		handleError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -168,6 +218,9 @@ func (c *Controller) DeleteMe(w http.ResponseWriter, r *http.Request) {
 // ==========================================
 
 func (c *Controller) AddPhone(w http.ResponseWriter, r *http.Request) {
+	ctx, span := otel.Tracer("users-api").Start(r.Context(), "AddPhone")
+	defer span.End()
+	r = r.WithContext(ctx)
 	var req users.AddPhoneRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		respondError(w, http.StatusBadRequest, "invalid request payload")
@@ -176,13 +229,16 @@ func (c *Controller) AddPhone(w http.ResponseWriter, r *http.Request) {
 
 	userID := getUserID(r)
 	if err := c.svc.AddPhoneNumber(r.Context(), userID, req.PhoneNumber); err != nil {
-		respondError(w, http.StatusBadRequest, err.Error())
+		handleError(w, err)
 		return
 	}
 	respondJSON(w, http.StatusOK, map[string]string{"message": "phone number added"})
 }
 
 func (c *Controller) RemovePhone(w http.ResponseWriter, r *http.Request) {
+	ctx, span := otel.Tracer("users-api").Start(r.Context(), "RemovePhone")
+	defer span.End()
+	r = r.WithContext(ctx)
 	// The path will be /v1/users/me/phones/{phone_number}
 	// Extract phone number from URL path
 	phone := r.PathValue("phone")
@@ -193,7 +249,7 @@ func (c *Controller) RemovePhone(w http.ResponseWriter, r *http.Request) {
 
 	userID := getUserID(r)
 	if err := c.svc.RemovePhoneNumber(r.Context(), userID, phone); err != nil {
-		respondError(w, http.StatusBadRequest, err.Error())
+		handleError(w, err)
 		return
 	}
 	respondJSON(w, http.StatusOK, map[string]string{"message": "phone number removed"})
