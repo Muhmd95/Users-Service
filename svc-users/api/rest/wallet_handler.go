@@ -54,10 +54,8 @@ func (c *Controller) GetWalletBalance(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Ideally we should check if this walletID actually belongs to the authenticated user.
-	// But in this proxy, we trust the Wallet service or add a quick check here.
-	// We will pass it to the service.
-	resp, err := c.svc.GetWalletBalance(r.Context(), walletID)
+	userID := getUserID(r) 
+	resp, err := c.svc.GetWalletBalance(r.Context(), userID, walletID)
 	if err != nil {
 		handleError(w, err)
 		return

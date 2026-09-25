@@ -6,13 +6,14 @@ import (
 	walletv1 "github.com/Muhmd95/Contracts/wallet/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"svc-users/internal/users"
 )
 
 type Client interface {
-	CreateWallet(ctx context.Context, userID, phoneNumber string) (string, error)
-	GetUserWallets(ctx context.Context, userID string) ([]*walletv1.WalletInfo, error)
-	GetWalletBalance(ctx context.Context, walletID string) (int64, error)
-	DeleteWallet(ctx context.Context, userID, walletID string) error
+	CreateWallet(ctx context.Context, userID string, req *users.CreateWalletProxyRequest) (*users.CreateWalletProxyResponse, error)
+	GetUserWallets(ctx context.Context, userID string) (*users.GetUserWalletsResponse, error)
+	GetWalletBalance(ctx context.Context, walletID string) (*users.GetWalletBalanceProxyResponse, error)
+	DeleteWallet(ctx context.Context, req *users.DeleteWalletRequest) error
 	DeleteUserWallets(ctx context.Context, userID string) error
 }
 
@@ -32,53 +33,74 @@ func NewClient(addr string) (Client, error) {
 	}, nil
 }
 
-func (c *grpcClient) CreateWallet(ctx context.Context, userID, phoneNumber string) (string, error) {
-	req := &walletv1.CreateWalletRequest{
+func (c *grpcClient) CreateWallet(ctx context.Context, userID string, req *users.CreateWalletProxyRequest) (*users.CreateWalletProxyResponse, error) {
+	protoReq := &walletv1.CreateWalletRequest{
 		UserId:      userID,
-		PhoneNumber: phoneNumber,
+		PhoneNumber: req.PhoneNumber,
 	}
-	resp, err := c.client.CreateWallet(ctx, req)
-	if err != nil {
-		return "", err
-	}
-	return resp.WalletId, nil
-}
-
-func (c *grpcClient) GetUserWallets(ctx context.Context, userID string) ([]*walletv1.WalletInfo, error) {
-	req := &walletv1.GetUserWalletsRequest{
-		UserId: userID,
-	}
-	resp, err := c.client.GetUserWallets(ctx, req)
+	resp, err := c.client.CreateWallet(ctx, protoReq)
 	if err != nil {
 		return nil, err
 	}
-	return resp.Wallets, nil
+	return &users.CreateWalletProxyResponse{
+		WalletID:  resp.WalletId,
+		Balance:   resp.Balance,
+		CreatedAt: resp.CreatedAt.AsTime(),
+	}, nil
 }
 
-func (c *grpcClient) GetWalletBalance(ctx context.Context, walletID string) (int64, error) {
-	req := &walletv1.GetWalletBalanceRequest{
-		WalletId: walletID,
+func (c *grpcClient) GetUserWallets(ctx context.Context, userID string) (*users.GetUserWalletsResponse, error) {
+	protoReq := &walletv1.GetUserWalletsRequest{
+		UserId: userID,
 	}
-	resp, err := c.client.GetWalletBalance(ctx, req)
+	resp, err := c.client.GetUserWallets(ctx, protoReq)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
-	return resp.Balance, nil
+	
+	summaries := make([]users.WalletSummary, len(resp.Wallets))
+	for i, w := range resp.Wallets {
+		summaries[i] = users.WalletSummary{
+			WalletID:     w.WalletId,
+			PhoneNumber:  w.PhoneNumber,
+			Balance:      w.Balance,
+			CurrencyCode: w.CurrencyCode,
+		}
+	}
+	
+	return &users.GetUserWalletsResponse{
+		Wallets: summaries,
+		Count:   len(summaries),
+	}, nil
 }
 
-func (c *grpcClient) DeleteWallet(ctx context.Context, userID, walletID string) error {
-	req := &walletv1.DeleteWalletRequest{
-		UserId:   userID,
+func (c *grpcClient) GetWalletBalance(ctx context.Context, walletID string) (*users.GetWalletBalanceProxyResponse, error) {
+	protoReq := &walletv1.GetWalletBalanceRequest{
 		WalletId: walletID,
 	}
-	_, err := c.client.DeleteWallet(ctx, req)
+	resp, err := c.client.GetWalletBalance(ctx, protoReq)
+	if err != nil {
+		return nil, err
+	}
+	return &users.GetWalletBalanceProxyResponse{
+		WalletID:  resp.WalletId,
+		Balance:   resp.Balance,
+		UpdatedAt: resp.UpdatedAt.AsTime(),
+	}, nil
+}
+
+func (c *grpcClient) DeleteWallet(ctx context.Context, req *users.DeleteWalletRequest) error {
+	protoReq := &walletv1.DeleteWalletRequest{
+		WalletId: req.WalletID,
+	}
+	_, err := c.client.DeleteWallet(ctx, protoReq)
 	return err
 }
 
 func (c *grpcClient) DeleteUserWallets(ctx context.Context, userID string) error {
-	req := &walletv1.DeleteUserWalletsRequest{
+	protoReq := &walletv1.DeleteUserWalletsRequest{
 		UserId: userID,
 	}
-	_, err := c.client.DeleteUserWallets(ctx, req)
+	_, err := c.client.DeleteUserWallets(ctx, protoReq)
 	return err
 }
