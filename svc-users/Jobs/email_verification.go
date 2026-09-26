@@ -3,8 +3,6 @@ package jobs
 import (
 	"context"
 	"fmt"
-	"os"
-	"strconv"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -22,21 +20,7 @@ type EmailWorker struct {
 	sender   string
 }
 
-func NewEmailWorker(jobsChan <-chan users.EmailJob, rdb *redis.Client) *EmailWorker {
-	host := os.Getenv("SMTP_HOST")
-	portStr := os.Getenv("SMTP_PORT")
-	user := os.Getenv("SMTP_USER")
-	pass := os.Getenv("SMTP_PASS")
-	sender := os.Getenv("SENDER_EMAIL")
-
-	port, _ := strconv.Atoi(portStr)
-	if port == 0 {
-		port = 587 // Default SMTP port
-	}
-	if sender == "" {
-		sender = "noreply@antigravity.wallet"
-	}
-
+func NewEmailWorker(jobsChan <-chan users.EmailJob, rdb *redis.Client, host string, port int, user, pass, sender string) *EmailWorker {
 	dialer := gomail.NewDialer(host, port, user, pass)
 
 	return &EmailWorker{

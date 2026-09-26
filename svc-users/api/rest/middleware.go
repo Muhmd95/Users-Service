@@ -224,6 +224,7 @@ func AuthMiddleware(tokenMaker token.Maker) func(http.Handler) http.Handler {
 	}
 }
 
+// not currently used
 // --- Ownership Middleware ---
 
 // OwnershipMiddleware extracts the user ID from the URL path (e.g., /users/{userID}/...)

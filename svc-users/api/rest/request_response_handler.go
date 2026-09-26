@@ -50,6 +50,32 @@ func getUserID(r *http.Request) string {
 	return uid
 }
 
+// helper to set refresh token cookie
+func setRefreshTokenCookie(w http.ResponseWriter, token string) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     "refresh_token",
+		Value:    token,
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   true,
+		SameSite: http.SameSiteStrictMode,
+		MaxAge:   30 * 24 * 60 * 60, // 30 days
+	})
+}
+
+// helper to clear refresh token cookie
+func clearRefreshTokenCookie(w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     "refresh_token",
+		Value:    "",
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   true,
+		SameSite: http.SameSiteStrictMode,
+		MaxAge:   -1,
+	})
+}
+
 // ==========================================
 // AUTH HANDLERS
 // ==========================================
@@ -107,6 +133,7 @@ func (c *Controller) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	setRefreshTokenCookie(w, resp.RefreshToken)
 	respondJSON(w, http.StatusOK, resp)
 }
 
@@ -115,8 +142,17 @@ func (c *Controller) RefreshToken(w http.ResponseWriter, r *http.Request) {
 	defer span.End()
 	r = r.WithContext(ctx)
 	var req users.RefreshTokenRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		respondError(w, http.StatusBadRequest, "invalid request payload")
+	
+	// Decode JSON if present, ignore errors as we might only have cookie
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	
+	// Check cookie and override
+	if cookie, err := r.Cookie("refresh_token"); err == nil && cookie.Value != "" {
+		req.RefreshToken = cookie.Value
+	}
+
+	if req.RefreshToken == "" {
+		respondError(w, http.StatusBadRequest, "refresh token is required")
 		return
 	}
 
@@ -138,6 +174,7 @@ func (c *Controller) Logout(w http.ResponseWriter, r *http.Request) {
 		handleError(w, err)
 		return
 	}
+	clearRefreshTokenCookie(w)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -162,6 +199,7 @@ func (c *Controller) ChangePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	setRefreshTokenCookie(w, resp.RefreshToken)
 	respondJSON(w, http.StatusOK, resp)
 }
 
