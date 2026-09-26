@@ -60,6 +60,8 @@ func (c *Client) AllowSlidingWindow(ctx context.Context, key string, limit int, 
 	return count <= int64(limit), nil
 }
 
+
+// those are used for the verify email endpoint
 // Set stores a key-value pair with an expiration time
 func (c *Client) Set(ctx context.Context, key string, value interface{}, expiration time.Duration) error {
 	return c.rdb.Set(ctx, key, value, expiration).Err()

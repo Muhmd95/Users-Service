@@ -10,16 +10,24 @@ import (
 )
 
 type Client interface {
-	CreateWallet(ctx context.Context, userID string, req *users.CreateWalletProxyRequest) (*users.CreateWalletProxyResponse, error)
+	CreateWallet(ctx context.Context, req *users.CreateWalletProxyRequest) (*users.CreateWalletProxyResponse, error)
 	GetUserWallets(ctx context.Context, userID string) (*users.GetUserWalletsResponse, error)
 	GetWalletBalance(ctx context.Context, walletID string) (*users.GetWalletBalanceProxyResponse, error)
 	DeleteWallet(ctx context.Context, req *users.DeleteWalletRequest) error
 	DeleteUserWallets(ctx context.Context, userID string) error
+	Close() error
 }
 
 type grpcClient struct {
 	client walletv1.WalletServiceClient
 	conn   *grpc.ClientConn
+}
+
+func (c *grpcClient) Close() error {
+	if c.conn != nil {
+		return c.conn.Close()
+	}
+	return nil
 }
 
 func NewClient(addr string) (Client, error) {
@@ -33,9 +41,9 @@ func NewClient(addr string) (Client, error) {
 	}, nil
 }
 
-func (c *grpcClient) CreateWallet(ctx context.Context, userID string, req *users.CreateWalletProxyRequest) (*users.CreateWalletProxyResponse, error) {
+func (c *grpcClient) CreateWallet(ctx context.Context, req *users.CreateWalletProxyRequest) (*users.CreateWalletProxyResponse, error) {
 	protoReq := &walletv1.CreateWalletRequest{
-		UserId:      userID,
+		UserId:      req.UserID,
 		PhoneNumber: req.PhoneNumber,
 	}
 	resp, err := c.client.CreateWallet(ctx, protoReq)
