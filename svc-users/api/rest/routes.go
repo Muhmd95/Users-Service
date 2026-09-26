@@ -46,8 +46,8 @@ func NewRouter(c *Controller, rdb *redis.Client, tokenMaker token.Maker) *http.S
 	mux.Handle("PUT /v1/users/me/password", protected(c.ChangePassword))
 
 	// Phones
-	mux.Handle("POST /v1/users/me/phones", protected(c.AddPhone))
-	mux.Handle("DELETE /v1/users/me/phones/{phone}", protected(c.RemovePhone))
+	mux.Handle("POST /v1/users/me/phones", protected(c.AddPhone)) // need better optimization
+	mux.Handle("DELETE /v1/users/me/phones/{phone}", protected(c.RemovePhone)) // needs better optimization
 
 	// Wallets
 	mux.Handle("POST /v1/users/me/wallets", protected(c.CreateWallet))
