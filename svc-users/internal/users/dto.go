@@ -36,7 +36,7 @@ type LoginRequest struct {
 type LoginResponse struct {
 	UserID       string `json:"user_id"`
 	AccessToken  string `json:"access_token"`
-	RefreshToken string `json:"refresh_token"`
+	RefreshToken string `json:"-"`
 	ExpiresIn    int64  `json:"expires_in"` // seconds
 }
 
@@ -83,6 +83,7 @@ type AddPhoneRequest struct {
 // --- Wallet Proxy DTOs ---
 
 type CreateWalletProxyRequest struct {
+	UserID       string    `json:"user_id"`
 	PhoneNumber  string `json:"phone_number"`
 	CurrencyCode string `json:"currency_code"`
 }

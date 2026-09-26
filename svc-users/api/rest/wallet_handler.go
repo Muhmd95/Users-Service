@@ -22,8 +22,8 @@ func (c *Controller) CreateWallet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	userID := getUserID(r)
-	resp, err := c.svc.CreateWallet(r.Context(), userID, &req)
+	req.UserID = getUserID(r)
+	resp, err := c.svc.CreateWallet(r.Context(), &req)
 	if err != nil {
 		handleError(w, err)
 		return

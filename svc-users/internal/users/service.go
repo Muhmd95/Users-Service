@@ -29,6 +29,7 @@ type WalletClient interface {
 	DeleteUserWallets(ctx context.Context, userID string) error
 	GetUserWallets(ctx context.Context, userID string) (*GetUserWalletsResponse, error)
 	GetWalletBalance(ctx context.Context, walletID string) (*GetWalletBalanceProxyResponse, error)
+	Close() error
 }
 
 type Service struct {
@@ -273,7 +274,7 @@ func (s *Service) RefreshToken(ctx context.Context, req *RefreshTokenRequest) (*
 
 	return &RefreshTokenResponse{
 		AccessToken: accessToken,
-		ExpiresIn:   int64(accessPayload.ExpiredAt.Sub(time.Now()).Seconds()),
+		ExpiresIn:   int64(time.Until(accessPayload.ExpiredAt).Seconds()),
 	}, nil
 }
 
@@ -501,14 +502,14 @@ func (s *Service) RemovePhoneNumber(ctx context.Context, userID string, phone st
 // WALLET PROXY METHODS
 // ==========================================
 
-func (s *Service) CreateWallet(ctx context.Context, userID string, req *CreateWalletProxyRequest) (*CreateWalletProxyResponse, error) {
+func (s *Service) CreateWallet(ctx context.Context, req *CreateWalletProxyRequest) (*CreateWalletProxyResponse, error) {
 	ctx, span := otel.Tracer("users-service").Start(ctx, "CreateWallet")
 	defer span.End()
 	if err := req.Validate(); err != nil {
 		return nil, err
 	}
 	log := logger.Ctx(ctx).With().Str("layer", "service").Logger()
-	user, err := s.repo.GetUserByID(ctx, userID)
+	user, err := s.repo.GetUserByID(ctx, req.UserID)
 	if err != nil {
 		return nil, err
 	}
@@ -539,7 +540,9 @@ func (s *Service) CreateWallet(ctx context.Context, userID string, req *CreateWa
 	}
 
 	// 4. Update local state: add the newly created wallet ID to the user's denormalized array in MongoDB.
-	if err := s.repo.AddWalletID(ctx, userID, resp.WalletID); err != nil {
+	// dual write problem
+	// solved by connecting the users database with a CDC to the wallets database
+	if err := s.repo.AddWalletID(ctx, req.UserID, resp.WalletID); err != nil {
 		log.Error().Err(err).Msg("Failed to add wallet ID to user document after creation")
 	}
 
