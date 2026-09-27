@@ -8,15 +8,16 @@ import (
 )
 
 type Config struct {
-	ServerPort         string
-	MongoURI           string
-	MongoDBName        string
-	RedisAddr          string
-	WalletGrpcAddr     string
-	TokenSymmetricKey  string
-	AccessTokenDur     time.Duration
-	RefreshTokenDur    time.Duration
-	OtlpEndpoint       string
+	ServerPort        string
+	MongoURI          string
+	MongoDBName       string
+	RedisAddr         string
+	WalletGrpcAddr    string
+	TokenSymmetricKey string
+	AccessTokenDur    time.Duration
+	RefreshTokenDur   time.Duration
+	OtlpEndpoint      string
+	SecureCookies     bool
 
 	SMTPHost    string
 	SMTPPort    int
@@ -66,6 +67,7 @@ func LoadConfig() (*Config, error) {
 		AccessTokenDur:    accessDur,
 		RefreshTokenDur:   refreshDur,
 		OtlpEndpoint:      os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"),
+		SecureCookies:     os.Getenv("APP_ENV") != "development",
 		SMTPHost:          os.Getenv("SMTP_HOST"),
 		SMTPPort:          smtpPort,
 		SMTPUser:          os.Getenv("SMTP_USER"),

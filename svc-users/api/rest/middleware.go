@@ -210,7 +210,7 @@ func AuthMiddleware(tokenMaker token.Maker) func(http.Handler) http.Handler {
 			}
 
 			accessToken := fields[1]
-			payload, err := tokenMaker.VerifyToken(accessToken)
+			payload, err := tokenMaker.VerifyToken(accessToken, token.AccessToken)
 			if err != nil {
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusUnauthorized)

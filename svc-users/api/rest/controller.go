@@ -5,11 +5,13 @@ import (
 )
 
 type Controller struct {
-	svc *users.Service
+	svc           *users.Service
+	secureCookies bool
 }
 
-func NewController(svc *users.Service) *Controller {
+func NewController(svc *users.Service, secureCookies bool) *Controller {
 	return &Controller{
-		svc: svc,
+		svc:           svc,
+		secureCookies: secureCookies,
 	}
 }

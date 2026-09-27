@@ -92,15 +92,15 @@ func main() {
 	var wg sync.WaitGroup
 	jobsChan := make(chan users.EmailJob, 100)
 	emailWorker := jobs.NewEmailWorker(
-		jobsChan, 
-		rdb, 
-		cfg.SMTPHost, 
-		cfg.SMTPPort, 
-		cfg.SMTPUser, 
-		cfg.SMTPPass, 
+		jobsChan,
+		rdb,
+		cfg.SMTPHost,
+		cfg.SMTPPort,
+		cfg.SMTPUser,
+		cfg.SMTPPass,
 		cfg.SenderEmail,
 	)
-	
+
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -118,7 +118,7 @@ func main() {
 		rdb,
 	)
 
-	controller := rest.NewController(service)
+	controller := rest.NewController(service, cfg.SecureCookies)
 
 	// 11. Router
 	mux := rest.NewRouter(controller, rdb, tokenMaker)
