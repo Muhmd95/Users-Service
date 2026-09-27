@@ -2,6 +2,7 @@ package rest
 
 import (
 	"encoding/json"
+	"errors"
 	"go.opentelemetry.io/otel"
 	"net/http"
 
@@ -25,6 +26,10 @@ func respondError(w http.ResponseWriter, status int, message string) {
 
 // handleError maps known domain errors to safe HTTP responses and hides internal server errors
 func handleError(w http.ResponseWriter, err error) {
+	if errors.Is(err, users.ErrInvalidInput) || errors.Is(err, users.ErrInvalidVerificationToken) {
+		respondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	switch err {
 	case users.ErrUserNotFound, users.ErrInvalidUserID:
 		respondError(w, http.StatusNotFound, err.Error())
@@ -111,7 +116,7 @@ func (c *Controller) Register(w http.ResponseWriter, r *http.Request) {
 
 // VerifyEmail handles email verification.
 // @Summary      Verify Email
-// @Description  Verifies a user's email using a token.
+// @Description  Verifies a user's email using a token. Missing, invalid, expired, or orphaned verification tokens return 400; database or Redis failures return 500.
 // @Tags         Auth
 // @Produce      json
 // @Param        token    query     string                     true  "Verification Token"
@@ -306,7 +311,8 @@ func (c *Controller) GetMe(w http.ResponseWriter, r *http.Request) {
 
 // UpdateMe updates the authenticated user's profile.
 // @Summary      Update My Profile
-// @Description  Updates the profile details of the currently authenticated user.
+// @Description  Updates the profile details of the currently authenticated user. Changing the email sets is_verified=false in the same database update. An unchanged email or a name-only update preserves verification. No new verification email is sent by this endpoint yet.
+// @Description  Invalid names and email addresses return 400.
 // @Tags         Profile
 // @Accept       json
 // @Produce      json

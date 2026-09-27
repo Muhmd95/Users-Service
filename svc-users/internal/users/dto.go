@@ -83,7 +83,7 @@ type AddPhoneRequest struct {
 // --- Wallet Proxy DTOs ---
 
 type CreateWalletProxyRequest struct {
-	UserID       string    `json:"user_id"`
+	UserID       string `json:"user_id"`
 	PhoneNumber  string `json:"phone_number"`
 	CurrencyCode string `json:"currency_code"`
 }
@@ -121,12 +121,12 @@ type GetWalletBalanceProxyResponse struct {
 func (r *RegisterUserRequest) Validate() error {
 	r.FullName = strings.TrimSpace(r.FullName)
 	if len(r.FullName) < 3 {
-		return fmt.Errorf("full name is required and must be at least 3 characters")
+		return fmt.Errorf("%w: full name is required and must be at least 3 characters", ErrInvalidInput)
 	}
 	r.Email = strings.TrimSpace(r.Email)
 	addr, err := mail.ParseAddress(r.Email)
 	if err != nil || addr.Address != r.Email {
-		return fmt.Errorf("invalid email format")
+		return fmt.Errorf("%w: invalid email format", ErrInvalidInput)
 	}
 	if len(r.Password) < 8 {
 		return ErrInvalidPassword
@@ -186,7 +186,7 @@ func ValidateNationalID(nationalID string) error {
 func (r *VerifyEmailRequest) Validate() error {
 	r.Token = strings.TrimSpace(r.Token)
 	if r.Token == "" {
-		return fmt.Errorf("token is required")
+		return fmt.Errorf("%w: token is required", ErrInvalidInput)
 	}
 	return nil
 }
@@ -197,7 +197,7 @@ func (r *LoginRequest) Validate() error {
 		return err
 	}
 	if len(r.Password) == 0 {
-		return fmt.Errorf("password is required")
+		return fmt.Errorf("%w: password is required", ErrInvalidInput)
 	}
 	return nil
 }
@@ -205,7 +205,7 @@ func (r *LoginRequest) Validate() error {
 func (r *RefreshTokenRequest) Validate() error {
 	r.RefreshToken = strings.TrimSpace(r.RefreshToken)
 	if r.RefreshToken == "" {
-		return fmt.Errorf("refresh token is required")
+		return fmt.Errorf("%w: refresh token is required", ErrInvalidInput)
 	}
 	return nil
 }
@@ -214,14 +214,14 @@ func (r *UpdateUserRequest) Validate() error {
 	if r.FullName != nil {
 		*r.FullName = strings.TrimSpace(*r.FullName)
 		if len(*r.FullName) < 3 {
-			return fmt.Errorf("full name must be at least 3 characters")
+			return fmt.Errorf("%w: full name must be at least 3 characters", ErrInvalidInput)
 		}
 	}
 	if r.Email != nil {
 		*r.Email = strings.TrimSpace(*r.Email)
 		addr, err := mail.ParseAddress(*r.Email)
 		if err != nil || addr.Address != *r.Email {
-			return fmt.Errorf("invalid email format")
+			return fmt.Errorf("%w: invalid email format", ErrInvalidInput)
 		}
 	}
 	return nil
@@ -229,7 +229,7 @@ func (r *UpdateUserRequest) Validate() error {
 
 func (r *ChangePasswordRequest) Validate() error {
 	if len(r.OldPassword) == 0 {
-		return fmt.Errorf("old password is required")
+		return fmt.Errorf("%w: old password is required", ErrInvalidInput)
 	}
 	if len(r.NewPassword) < 8 {
 		return ErrInvalidPassword
@@ -250,7 +250,7 @@ func (r *CreateWalletProxyRequest) Validate() error {
 	r.CurrencyCode = strings.TrimSpace(r.CurrencyCode)
 	r.CurrencyCode = strings.ToUpper(r.CurrencyCode)
 	if r.CurrencyCode != "EGP" {
-		return fmt.Errorf("unsupported currency code: only EGP is supported")
+		return fmt.Errorf("%w: unsupported currency code: only EGP is supported", ErrInvalidInput)
 	}
 	return nil
 }
@@ -258,7 +258,7 @@ func (r *CreateWalletProxyRequest) Validate() error {
 func (r *DeleteWalletRequest) Validate() error {
 	r.WalletID = strings.TrimSpace(r.WalletID)
 	if r.WalletID == "" {
-		return fmt.Errorf("wallet id is required")
+		return fmt.Errorf("%w: wallet id is required", ErrInvalidInput)
 	}
 	return nil
 }

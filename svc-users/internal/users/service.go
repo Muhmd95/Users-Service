@@ -22,6 +22,12 @@ type EmailJob struct {
 	Token string
 }
 
+// VerificationTokenStore is the email-token storage used by the service.
+type VerificationTokenStore interface {
+	Get(ctx context.Context, key string) (string, error)
+	Del(ctx context.Context, key string) error
+}
+
 // WalletClient defines the interface for communicating with the Wallet Service
 type WalletClient interface {
 	CreateWallet(ctx context.Context, req *CreateWalletProxyRequest) (*CreateWalletProxyResponse, error)
@@ -39,10 +45,10 @@ type Service struct {
 	tokenMaker           token.Maker
 	accessTokenDuration  time.Duration
 	refreshTokenDuration time.Duration
-	rdb                  *redis.Client
+	rdb                  VerificationTokenStore
 }
 
-func NewService(repo Repository, walletClient WalletClient, emailJobs chan<- EmailJob, tokenMaker token.Maker, accessDuration, refreshDuration time.Duration, rdb *redis.Client) *Service {
+func NewService(repo Repository, walletClient WalletClient, emailJobs chan<- EmailJob, tokenMaker token.Maker, accessDuration, refreshDuration time.Duration, rdb VerificationTokenStore) *Service {
 	return &Service{
 		repo:                 repo,
 		walletClient:         walletClient,
@@ -161,12 +167,18 @@ func (s *Service) VerifyEmail(ctx context.Context, req *VerifyEmailRequest) erro
 
 	email, err := s.rdb.Get(ctx, "email_verify:"+req.Token)
 	if err != nil {
-		return errors.New("invalid or expired verification token")
+		if errors.Is(err, redis.ErrNotFound) {
+			return ErrInvalidVerificationToken
+		}
+		return fmt.Errorf("failed to read verification token: %w", err)
 	}
 
 	user, err := s.repo.GetUserByEmail(ctx, email)
 	if err != nil {
-		return errors.New("user not found for this token")
+		if errors.Is(err, ErrUserNotFound) {
+			return ErrInvalidVerificationToken
+		}
+		return fmt.Errorf("failed to find user for verification: %w", err)
 	}
 
 	_, err = s.repo.UpdateUser(ctx, user.ID.Hex(), map[string]interface{}{
@@ -399,7 +411,15 @@ func (s *Service) UpdateUser(ctx context.Context, userID string, req *UpdateUser
 		updates["full_name"] = *req.FullName
 	}
 	if req.Email != nil {
-		updates["email"] = *req.Email
+		currentUser, err := s.repo.GetUserByID(ctx, userID)
+		if err != nil {
+			return nil, err
+		}
+		if currentUser.Email != *req.Email {
+			// Persist both fields in the repository's single atomic $set update.
+			updates["email"] = *req.Email
+			updates["is_verified"] = false
+		}
 	}
 	updates["updated_at"] = time.Now()
 
@@ -480,7 +500,7 @@ func (s *Service) RemovePhoneNumber(ctx context.Context, userID string, phone st
 
 	// Cannot remove the last phone number
 	if len(user.PhoneNumbers) <= 1 {
-		return errors.New("cannot remove the last phone number")
+		return fmt.Errorf("%w: cannot remove the last phone number", ErrInvalidInput)
 	}
 
 	// Check if a wallet uses this phone
@@ -527,7 +547,7 @@ func (s *Service) CreateWallet(ctx context.Context, req *CreateWalletProxyReques
 		}
 	}
 	if !phoneFound {
-		return nil, errors.New("phone number does not belong to user")
+		return nil, fmt.Errorf("%w: phone number does not belong to user", ErrInvalidInput)
 	}
 
 	if s.walletClient == nil {

@@ -12,6 +12,9 @@ type Client struct {
 	rdb *redis.Client
 }
 
+// ErrNotFound distinguishes a missing/expired key from a Redis connection failure.
+var ErrNotFound = redis.Nil
+
 func NewClient(addr string) (*Client, error) {
 	rdb := redis.NewClient(&redis.Options{
 		Addr: addr,
@@ -59,7 +62,6 @@ func (c *Client) AllowSlidingWindow(ctx context.Context, key string, limit int, 
 	count := countCmd.Val()
 	return count <= int64(limit), nil
 }
-
 
 // those are used for the verify email endpoint
 // Set stores a key-value pair with an expiration time
