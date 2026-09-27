@@ -64,7 +64,7 @@ func (w *EmailWorker) processJob(ctx context.Context, job users.EmailJob, log ze
 	m.SetHeader("To", job.Email)
 	m.SetHeader("Subject", "Verify your email address")
 
-	verifyURL := fmt.Sprintf("http://localhost:8080/v1/users/verify-email?token=%s", job.Token)
+	verifyURL := fmt.Sprintf("http://localhost:8001/v1/users/verify-email?token=%s", job.Token)
 	body := fmt.Sprintf(`
 		<h1>Welcome to Ewallet!</h1>
 		<p>Please click the link below to verify your email address:</p>
