@@ -5,13 +5,29 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	httpSwagger "github.com/swaggo/http-swagger/v2"
 
+	_ "svc-users/docs" // Import generated swagger docs
 	"svc-users/external/redis"
 	"svc-users/util/token"
 )
 
+// @title           Users Service API
+// @version         1.0
+// @description     This is the REST API for the Users Service.
+// @host            localhost:8001
+// @BasePath        /
+// @securityDefinitions.apikey BearerAuth
+// @in header
+// @name Authorization
+// @description Enter Bearer <access_token>. Requires a signed, unexpired JWT with token_type=access; refresh tokens and older tokens without token_type are rejected.
 func NewRouter(c *Controller, rdb *redis.Client, tokenMaker token.Maker) *http.ServeMux {
 	mux := http.NewServeMux()
+
+	// Swagger UI
+	mux.HandleFunc("/v1/swagger/", httpSwagger.Handler(
+		httpSwagger.URL("/v1/swagger/doc.json"),
+	))
 
 	// 1. Core middlewares (Logger + Metrics)
 	// We'll wrap the final mux with these when returning

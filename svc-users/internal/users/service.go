@@ -211,13 +211,13 @@ func (s *Service) Login(ctx context.Context, req *LoginRequest) (*LoginResponse,
 	}
 
 	// Generate Access Token
-	accessToken, _, err := s.tokenMaker.CreateToken(user.ID.Hex(), s.accessTokenDuration)
+	accessToken, _, err := s.tokenMaker.CreateToken(user.ID.Hex(), token.AccessToken, s.accessTokenDuration)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create access token: %w", err)
 	}
 
 	// Generate Refresh Token
-	refreshToken, refreshPayload, err := s.tokenMaker.CreateToken(user.ID.Hex(), s.refreshTokenDuration)
+	refreshToken, refreshPayload, err := s.tokenMaker.CreateToken(user.ID.Hex(), token.RefreshToken, s.refreshTokenDuration)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create refresh token: %w", err)
 	}
@@ -249,7 +249,7 @@ func (s *Service) RefreshToken(ctx context.Context, req *RefreshTokenRequest) (*
 		return nil, err
 	}
 	// Verify the provided refresh token
-	refreshPayload, err := s.tokenMaker.VerifyToken(req.RefreshToken)
+	refreshPayload, err := s.tokenMaker.VerifyToken(req.RefreshToken, token.RefreshToken)
 	if err != nil {
 		return nil, ErrInvalidToken
 	}
@@ -267,7 +267,7 @@ func (s *Service) RefreshToken(ctx context.Context, req *RefreshTokenRequest) (*
 	}
 
 	// Issue new access token
-	accessToken, accessPayload, err := s.tokenMaker.CreateToken(refreshPayload.UserID, s.accessTokenDuration)
+	accessToken, accessPayload, err := s.tokenMaker.CreateToken(refreshPayload.UserID, token.AccessToken, s.accessTokenDuration)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create access token: %w", err)
 	}
@@ -327,13 +327,13 @@ func (s *Service) ChangePassword(ctx context.Context, userID string, oldPassword
 	}
 
 	// Generate Access Token
-	accessToken, _, err := s.tokenMaker.CreateToken(user.ID.Hex(), s.accessTokenDuration)
+	accessToken, _, err := s.tokenMaker.CreateToken(user.ID.Hex(), token.AccessToken, s.accessTokenDuration)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create access token: %w", err)
 	}
 
 	// Generate Refresh Token
-	refreshToken, refreshPayload, err := s.tokenMaker.CreateToken(user.ID.Hex(), s.refreshTokenDuration)
+	refreshToken, refreshPayload, err := s.tokenMaker.CreateToken(user.ID.Hex(), token.RefreshToken, s.refreshTokenDuration)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create refresh token: %w", err)
 	}
