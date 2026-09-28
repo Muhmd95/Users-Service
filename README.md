@@ -2,7 +2,7 @@
 
 An optional extension to the Wallet & Transactions internship project, built to practice authentication, account management, background jobs, and service integration in Go.
 
-**Status: work in progress.** Authentication, profile, and phone-management code is implemented. Wallet proxy routes and their gRPC client exist, but the required Wallet Service RPC implementations are still missing. This README describes the current source code; endpoint definitions do not imply that every flow works end to end.
+**Status: work in progress.** Authentication, profile and phone management, and the Users-to-Wallet gateway are implemented. Remaining reliability and security limitations are documented below.
 
 ## Responsibilities
 
@@ -37,7 +37,7 @@ flowchart TD
     Worker -->|Token with 24-hour expiry| Redis
     Worker --> SMTP[SMTP server]
     Service --> WalletClient[Wallet gRPC client]
-    WalletClient -. Required RPCs not implemented yet .-> Wallet[Wallet Service]
+    WalletClient -->|Internal gRPC| Wallet[Wallet Service]
 ```
 
 ### Layers and dependencies
@@ -139,12 +139,14 @@ Access JWTs contain `token_type: "access"`; refresh JWTs contain `token_type: "r
 
 Revoking refresh tokens does not invalidate already-issued access tokens. Refresh-token values are currently stored directly in the field named `token_hash`; hashing is not implemented. Both token purposes still use the same configured signing key; their enforced claim values separate their permitted uses.
 
-### Wallet orchestration (unfinished)
+### Wallet orchestration
 
 - Creation checks that the selected phone belongs to the user and that fewer than three wallet IDs are recorded, calls Wallet, then adds the returned ID locally.
 - Balance lookup checks membership in `wallet_ids` before calling Wallet.
 - Deletion removes the ID only if the user owns it, calls Wallet, and attempts to restore the ID if the RPC fails.
 - Account deletion marks the user `DELETED`, attempts token revocation, and attempts deletion of all user wallets. Failures in those follow-up operations are logged without undoing the account deletion.
+
+Wallet implements all five gateway RPCs: `CreateWallet`, `GetUserWallets`, `GetWalletBalance`, `DeleteWallet`, and `DeleteUserWallets`. Create, list, and delete-all use `user_id`; balance and single deletion use `wallet_id`.
 
 There is no Users-to-Wallet CDC synchronization implemented. Creation and local ID storage are separate writes, so partial failure remains possible. The local wallet-ID limit does not make creation across both services atomic.
 
@@ -200,7 +202,7 @@ The profile response contains `user_id`, `full_name`, `national_id`, `email`, `p
 
 ### Wallet proxy routes
 
-**These routes are registered, but their corresponding Wallet RPCs are not implemented in the current Wallet server.** The success responses below describe the Users handlers' contracts, not verified end-to-end behavior.
+These routes call Wallet's implemented internal gRPC methods. Wallet's own business REST routes remain commented, making Users the client-facing HTTP gateway.
 
 | Method | Path | Auth | Input | Success contract |
 |---|---|---|---|---|
@@ -209,7 +211,7 @@ The profile response contains `user_id`, `full_name`, `national_id`, `email`, `p
 | GET | `/v1/users/me/wallets/{wallet_id}/balance` | Bearer | Wallet ID in path | `200`: `wallet_id`, `balance`, `updated_at` |
 | DELETE | `/v1/users/me/wallets/{wallet_id}` | Bearer | Wallet ID in path | `204` |
 
-Creation derives `user_id` from the token, overriding any value in the body. Each wallet-list item contains `wallet_id`, `phone_number`, `balance`, and `currency_code`. The client also defines `DeleteUserWallets`, used internally during account deletion.
+Creation derives `user_id` from the token, overriding any value in the body. Each wallet-list item contains all five fields returned by Wallet: `wallet_id`, `phone_number`, `balance`, `currency_code`, and `created_at`. The client also defines `DeleteUserWallets`, used internally during account deletion.
 
 ### Documentation and metrics
 
@@ -243,7 +245,7 @@ Login after verification:
 }
 ```
 
-Wallet creation request (integration pending):
+Wallet creation request:
 
 ```json
 {
@@ -286,7 +288,7 @@ HTTP metrics are exposed at `/metrics`:
 
 ## Configuration and local development
 
-The module declares Go **1.26.5**. Local development also needs MongoDB, Redis, an SMTP server for verification, and a Contracts version that contains the RPC messages used by the Wallet client. Wallet must be available for wallet operations once its missing RPCs are implemented.
+The module declares Go **1.26.5**. Local development also needs MongoDB, Redis, an SMTP server for verification, the published Contracts dependency, and Wallet on the configured gRPC address for wallet operations.
 
 Create `svc-users/.ENV` using the template, then fill in the settings:
 
@@ -321,18 +323,19 @@ MongoDB and Redis are checked during startup. The gRPC connection is created at 
 
 - The email worker hardcodes verification links to `http://localhost:8080`. When Users runs on 8001, use the same token against `http://localhost:8001/v1/users/verify-email?token=...`; configurable public URLs remain to be implemented.
 - For local HTTP cookie testing, use `APP_ENV=development` in `.ENV` or the process environment. All other environments require HTTPS for normal browser cookie use; the application itself does not configure TLS termination.
-- The current `go.mod` uses a published Contracts version without a local replacement. That dependency lacks the newer Wallet methods/messages used by `client/wallet`, so the full Users build is currently blocked by undefined RPC symbols. If a local `../../Contracts` replacement is restored, the Docker build context/layout must also include that sibling module.
-- Wallet's server currently implements `GetWallet` and legacy `ModifyBalance` only. Users requires `CreateWallet`, `GetUserWallets`, `GetWalletBalance`, `DeleteWallet`, and `DeleteUserWallets`.
+- Users validates `currency_code=EGP`, while the creation protobuf sends only `user_id` and `phone_number`; Wallet therefore applies EGP as its default.
+- User account deletion is not atomic across services. The Users record is soft-deleted first, and Wallet bulk-deletion failures are logged without rolling the user state back.
+- Wallet deletion is a hard delete for this learning project and is not coordinated with the Transactions ledger. Historical transactions can retain deleted wallet IDs.
 - Account status checks remain incomplete across protected operations; email verification represents email ownership, not external identity/KYC verification. Token-purpose separation is enforced independently of those account-status checks.
 
 ## Deferred issues to revisit
 
-These items are documented follow-up work, not implemented fixes. Wallet integration remains deferred separately above.
+These items are documented follow-up work, not implemented fixes.
 
 - [ ] **Prove ownership before reactivating deleted accounts.** `RegisterUser` currently accepts the national ID of a deleted account and replaces its email, phones, and password. Verification of the new email does not prove ownership of the original account. Require an authenticated recovery flow or proof through the original verified contact before restoring that identity. See `internal/users/service.go`, `RegisterUser`.
 - [ ] **Enforce current account status across protected operations and refresh.** Login checks status, but JWT middleware and refresh do not consistently consult current account state. An existing access token can pass authentication after suspension/deletion. Define and implement the account-status check and session-invalidation policy. See `api/rest/middleware.go` and `internal/users/service.go`.
 - [ ] **Handle failed session revocation reliably.** Password change and account deletion currently log refresh-token revocation failures and continue. Old refresh tokens can remain usable after such a failure. Make the state change and revocation consistent, or add a reliable recovery mechanism. Existing access tokens also remain valid until expiry; decide whether immediate invalidation is needed.
-- [ ] **Make the last-phone rule atomic.** `RemovePhoneNumber` checks the array length before a separate database update. Two concurrent requests can both see two numbers, then remove one each and leave no login phone. Enforce the minimum inside the MongoDB update filter. Wallet lookup errors also currently allow removal to proceed; revisit that behavior when integrating Wallet. See `external/mongodb/repo.go` and `internal/users/service.go`.
+- [ ] **Make the last-phone rule atomic.** `RemovePhoneNumber` checks the array length before a separate database update. Two concurrent requests can both see two numbers, then remove one each and leave no login phone. Enforce the minimum inside the MongoDB update filter. Wallet lookup errors also currently allow removal to proceed; decide whether Wallet unavailability should block phone removal. See `external/mongodb/repo.go` and `internal/users/service.go`.
 - [ ] **Recover from lost verification emails.** The in-memory queue drops jobs when full, pending jobs can be lost on process failure, and SMTP failures have no retry/resend path. Registration can succeed while the user cannot verify or log in. Add resend/retry handling and a delivery strategy appropriate to the project. See `Jobs/email_verification.go` and `RegisterUser`.
 - [ ] **Complete verification after email changes.** Profile updates now clear verification atomically with the changed email, but do not send a new verification link. Add a verification job or resend flow for the new address. Until then, changing email prevents subsequent login until the new address is verified. Existing access tokens are not revoked by this update.
 - [ ] **Store hashes of refresh tokens.** `token_hash` currently contains the usable token itself. Hash before storing and hash the incoming token for database lookup/revocation, with a plan for existing records. This reduces the usefulness of a database-only credential leak. See `Login`, `RefreshToken`, `ChangePassword`, and the refresh-token repository methods.
@@ -359,11 +362,10 @@ Authentication tests run without external services:
 | `svc-users/internal/users/profile_test.go` | Changed/same/omitted email behavior, paired email/verification updates, invalid profile rejection, and invalid verification tokens versus infrastructure failures. |
 | `svc-users/api/rest/errors_test.go` | Client validation errors mapped to `400` and unexpected server errors kept masked as `500`. |
 
-End-to-end validation still needs MongoDB, Redis, working SMTP, and completed Wallet integration. The empty Users CI file does not currently run these checks automatically.
+End-to-end validation still needs MongoDB, Redis, working SMTP, and a running Wallet service. The empty Users CI file does not currently run these checks automatically.
 
-While the Contracts mismatch blocks `go test ./...`, the authentication checks can run independently:
+The complete unit/package suite can run with:
 
 ```powershell
-go test ./util/token ./api/rest ./internal/users
-go test ./cmd/config.go ./cmd/config_test.go
+go test ./...
 ```

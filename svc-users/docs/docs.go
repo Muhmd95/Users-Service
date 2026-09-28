@@ -1099,6 +1099,9 @@ const docTemplate = `{
                 "balance": {
                     "type": "integer"
                 },
+                "created_at": {
+                    "type": "string"
+                },
                 "currency_code": {
                     "type": "string"
                 },
