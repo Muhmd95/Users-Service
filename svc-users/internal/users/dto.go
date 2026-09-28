@@ -100,10 +100,11 @@ type GetUserWalletsResponse struct {
 }
 
 type WalletSummary struct {
-	WalletID     string `json:"wallet_id"`
-	PhoneNumber  string `json:"phone_number"`
-	Balance      int64  `json:"balance"`
-	CurrencyCode string `json:"currency_code"`
+	WalletID     string    `json:"wallet_id"`
+	PhoneNumber  string    `json:"phone_number"`
+	Balance      int64     `json:"balance"`
+	CurrencyCode string    `json:"currency_code"`
+	CreatedAt    time.Time `json:"created_at"`
 }
 
 type DeleteWalletRequest struct {

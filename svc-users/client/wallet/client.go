@@ -65,7 +65,7 @@ func (c *grpcClient) GetUserWallets(ctx context.Context, userID string) (*users.
 	if err != nil {
 		return nil, err
 	}
-	
+
 	summaries := make([]users.WalletSummary, len(resp.Wallets))
 	for i, w := range resp.Wallets {
 		summaries[i] = users.WalletSummary{
@@ -73,9 +73,10 @@ func (c *grpcClient) GetUserWallets(ctx context.Context, userID string) (*users.
 			PhoneNumber:  w.PhoneNumber,
 			Balance:      w.Balance,
 			CurrencyCode: w.CurrencyCode,
+			CreatedAt:    w.CreatedAt.AsTime(),
 		}
 	}
-	
+
 	return &users.GetUserWalletsResponse{
 		Wallets: summaries,
 		Count:   len(summaries),
