@@ -1,3 +1,46 @@
+## Wallet & Transactions: system at a glance
+
+This service is part of a larger system for user accounts, wallets, financial transactions, and notifications. **Users Service is highlighted below because you are reading its README.**
+
+```mermaid
+flowchart LR
+    Client[HTTP client]
+
+    subgraph Services[Application services]
+        Users["<b>Users Service</b><br/>Authentication, accounts and wallet gateway<br/>You are here"]
+        Wallet["Wallet Service<br/>Wallets and balance projection"]
+        Transactions["Transactions Service<br/>Deposits, withdrawals and transfers"]
+        Notifications["Notifications Service<br/>Push and SMS processing"]
+    end
+
+    Client -->|REST: accounts and wallets| Users
+    Client -->|REST: financial operations| Transactions
+    Users -->|gRPC: wallet operations| Wallet
+    Transactions -->|gRPC: wallet lookup| Wallet
+
+    Users --> UsersDB[(MongoDB: users_db)]
+    Users -->|Rate limits and verification tokens| Redis[(Redis)]
+    Users -.->|Email worker| SMTP[SMTP server]
+    Wallet --> WalletDB[(MongoDB: wallet_db)]
+    Wallet -->|Wallet cache| Redis
+    Transactions -->|Write transaction ledger| TransactionsDB[(MongoDB: transactions_db)]
+    Notifications --> NotificationsDB[(MongoDB: notifications_db)]
+
+    TransactionsDB -.->|Change streams| Connect[Kafka Connect]
+    Connect -.->|POSTED transaction events| Kafka["Kafka<br/>transactions_db.transactions"]
+    Kafka -.->|Balance synchronization| Wallet
+    Kafka -.->|Notification events| Notifications
+
+    classDef currentService fill:#dbeafe,stroke:#1d4ed8,stroke-width:4px,color:#172554,font-weight:bold;
+    class Users currentService;
+```
+
+Solid arrows show requests and data access; dashed arrows show asynchronous processing. Each service owns its MongoDB database. Users handles authentication and account management, delegates wallet operations to Wallet, and sends verification emails through its background worker. Transactions owns the financial ledger; its committed records feed wallet balance synchronization and notification processing through Kafka Connect and Kafka.
+
+The shared monitoring stack uses Prometheus and Grafana for metrics and Jaeger for traces. See the root [`docker-compose.yml`](../docker-compose.yml) for how the system is connected, or explore the [Wallet](../Wallet-Service/README.md), [Transactions](../Transactions-Service/README.md), and [Notifications](../Notifications-Service/README.md) service READMEs.
+
+---
+
 # Users Service (`svc-users`)
 
 An optional extension to the Wallet & Transactions internship project, built to practice authentication, account management, background jobs, and service integration in Go.
@@ -75,7 +118,9 @@ Users-Service/
 |-- .github/workflows/ci.yml       # Currently empty; no Users CI job defined
 `-- svc-users/
     |-- cmd/
-    |   |-- main.go               # Dependency wiring, HTTP server, worker, shutdown
+    |   |-- main.go               # Dependency wiring, startup errors, resource cleanup
+    |   |-- shutdown.go           # HTTP draining, email draining/cancellation, deadlines
+    |   |-- shutdown_test.go      # Active requests, late sends, worker/server failures
     |   `-- config.go             # Environment parsing, defaults, required settings
     |-- api/rest/
     |   |-- controller.go         # Controller holding the Users service
@@ -94,7 +139,10 @@ Users-Service/
     |   |   `-- repo.go           # Queries, updates, indexes, ownership, token records
     |   `-- redis/client.go       # Redis connection, rate limiter, token helpers
     |-- client/wallet/client.go   # Wallet gRPC client and DTO conversions
-    |-- Jobs/email_verification.go # Buffered-channel worker and SMTP delivery
+    |-- Jobs/
+    |   |-- email_verification.go # Buffered-channel worker and verification messages
+    |   |-- smtp.go               # SMTP deadlines, cancellation, TLS and authentication
+    |   `-- smtp_test.go          # Stalled sockets and plain/TLS delivery checks
     |-- util/
     |   |-- token/jwt.go          # JWT maker, HS256 signing, token validation
     |   |-- logger/logger.go      # Zerolog configuration and trace correlation
@@ -131,11 +179,13 @@ The queue is in memory. A full queue drops the new job with a warning. An SMTP f
 
 - Login uses **phone number + password** and requires a verified account that is neither suspended nor deleted.
 - Successful login returns an access token in JSON and sets the refresh token in an `HttpOnly`, `SameSite=Strict` cookie named `refresh_token`. The cookie is `Secure` unless `APP_ENV=development` is explicitly configured. The same policy applies when replacing or clearing the cookie.
-- Refresh verifies the JWT and stored refresh-token record, then issues a new access token. It does not rotate the refresh token.
+- Refresh verifies the JWT and stored refresh-token record, then issues a new access token. It does not rotate the refresh token. When an otherwise valid refresh JWT is expired, the service calls the repository to revoke that specific token and returns `401` with `token has expired`. If TTL cleanup already removed it, the same expiry response is returned; other revocation failures are reported as server errors.
 - Logout revokes **all** of the user's stored refresh tokens and clears the cookie.
 - Password change verifies the old password, saves the new hash, attempts to revoke existing refresh tokens, and issues a fresh access/refresh pair.
 
 Access JWTs contain `token_type: "access"`; refresh JWTs contain `token_type: "refresh"`. Protected-route middleware requires an access token, and the refresh operation requires a refresh token before querying its database record. Verification checks the signature using HS256 only, requires a valid expiration, checks the expected token purpose, and requires the subject to match the nonempty user ID. Missing or unknown purposes are rejected, including older tokens issued before this claim was added; existing users must log in again.
+
+Expired access tokens, malformed JWTs, invalid signatures, and invalid purpose/identity claims do not trigger refresh-token revocation. Expiry revocation happens when the token is submitted for refresh; no scheduled service-layer revocation is implemented. MongoDB's existing TTL index removes expired records rather than setting their `revoked` flag.
 
 Revoking refresh tokens does not invalidate already-issued access tokens. Refresh-token values are currently stored directly in the field named `token_hash`; hashing is not implemented. Both token purposes still use the same configured signing key; their enforced claim values separate their permitted uses.
 
@@ -149,6 +199,18 @@ Revoking refresh tokens does not invalidate already-issued access tokens. Refres
 Wallet implements all five gateway RPCs: `CreateWallet`, `GetUserWallets`, `GetWalletBalance`, `DeleteWallet`, and `DeleteUserWallets`. Create, list, and delete-all use `user_id`; balance and single deletion use `wallet_id`.
 
 There is no Users-to-Wallet CDC synchronization implemented. Creation and local ID storage are separate writes, so partial failure remains possible. The local wallet-ID limit does not make creation across both services atomic.
+
+### Graceful shutdown
+
+On Ctrl+C or SIGTERM, Users stops accepting HTTP requests and allows active handlers up to **10 seconds** to finish. Only after handlers finish does it close the email-job channel and allow up to **5 seconds** for queued emails to drain. Redis, MongoDB, and Wallet remain available during this work.
+
+If HTTP draining expires, the server cancels request contexts and closes connections. The email queue stays open because a late handler may still enqueue a job; the worker is canceled instead. If email draining expires, the worker is canceled and gets up to **5 additional seconds** to stop. Queued emails may be lost during forced shutdown.
+
+SMTP delivery uses a **10-second operation deadline** and closes its connection when the worker context is canceled, including during a stalled greeting or message acknowledgement. Implicit TLS, STARTTLS, and SMTP authentication are supported. Remote LOGIN authentication requires TLS. Cleanup of an unsent verification token gets a separate one-second context.
+
+After the worker finishes or its forced-stop deadline expires, shutdown closes the Wallet and Redis clients, disconnects MongoDB, and flushes tracing. MongoDB and tracer cleanup each receive a fresh **5-second deadline**. Startup and HTTP server failures also return through dependency cleanup. A failed HTTP/email drain returns an error rather than claiming a fully graceful stop.
+
+The root Compose configuration gives Users **40 seconds** to stop before Docker forces termination. Handlers that ignore cancellation and jobs interrupted by the forced deadline are not guaranteed to complete; the queue is still in memory.
 
 ## Data and validation
 
@@ -351,14 +413,16 @@ go build ./...
 go test ./...
 ```
 
-Authentication tests run without external services:
+Authentication and shutdown tests run without external services:
 
 | Test file | Coverage |
 |---|---|
 | `svc-users/util/token/jwt_test.go` | Valid token purposes, cross-purpose rejection, missing/unknown claims, expiry, subject consistency, signatures, and algorithm restriction. |
 | `svc-users/api/rest/auth_test.go` | Refresh tokens rejected as bearer access tokens; cookie attributes when setting and clearing in both secure modes. |
-| `svc-users/internal/users/auth_test.go` | Access tokens rejected before refresh-token lookup, valid refresh issuing an access token, and revoked refresh rejection. |
+| `svc-users/internal/users/auth_test.go` | Access tokens rejected before refresh-token lookup, valid refresh issuing an access token, revoked refresh rejection, expired-token revocation, TTL-deleted records, revocation failures, and expired access tokens rejected without revocation. |
 | `svc-users/cmd/config_test.go` | Only explicit development disables secure cookies; other and missing environment values retain secure cookies. |
+| `svc-users/cmd/shutdown_test.go` | Active requests finish before queue closure, queued emails drain, HTTP timeouts cancel requests without panicking late producers, email timeouts stop the worker, and server failures trigger shutdown. |
+| `svc-users/Jobs/smtp_test.go` | Cancellation interrupts stalled greetings/message acknowledgements; accepted emails stay successful if QUIT is interrupted; local plain, implicit TLS, and STARTTLS delivery; LOGIN authentication behavior. |
 | `svc-users/internal/users/profile_test.go` | Changed/same/omitted email behavior, paired email/verification updates, invalid profile rejection, and invalid verification tokens versus infrastructure failures. |
 | `svc-users/api/rest/errors_test.go` | Client validation errors mapped to `400` and unexpected server errors kept masked as `500`. |
 
