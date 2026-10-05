@@ -200,9 +200,9 @@ func (c *Controller) RefreshToken(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewDecoder(r.Body).Decode(&req)
 
 	// Check cookie and override
-	if cookie, err := r.Cookie("refresh_token"); err == nil && cookie.Value != "" {
-		req.RefreshToken = cookie.Value
-	}
+	// if cookie, err := r.Cookie("refresh_token"); err == nil && cookie.Value != "" {
+	// 	req.RefreshToken = cookie.Value
+	// }
 
 	if req.RefreshToken == "" {
 		respondError(w, http.StatusBadRequest, "refresh token is required")
