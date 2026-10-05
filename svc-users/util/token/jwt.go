@@ -83,8 +83,12 @@ func (maker *JWTMaker) VerifyToken(tokenString string, expectedType TokenType) (
 		jwt.WithExpirationRequired(),
 	)
 	if err != nil {
-		if errors.Is(err, jwt.ErrTokenExpired) {
-			return nil, ErrExpiredToken
+		// Only an otherwise valid token may trigger expiry cleanup.
+		if errors.Is(err, jwt.ErrTokenExpired) && !errors.Is(err, jwt.ErrTokenNotValidYet) {
+			payload, ok := jwtToken.Claims.(*Payload)
+			if ok && payload.TokenType == expectedType && payload.UserID != "" && payload.Subject == payload.UserID {
+				return nil, ErrExpiredToken
+			}
 		}
 		return nil, ErrInvalidToken
 	}

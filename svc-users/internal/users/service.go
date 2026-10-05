@@ -263,6 +263,13 @@ func (s *Service) RefreshToken(ctx context.Context, req *RefreshTokenRequest) (*
 	// Verify the provided refresh token
 	refreshPayload, err := s.tokenMaker.VerifyToken(req.RefreshToken, token.RefreshToken)
 	if err != nil {
+		if errors.Is(err, token.ErrExpiredToken) {
+			// TTL cleanup may already have removed this record.
+			if revokeErr := s.repo.RevokeRefreshToken(ctx, req.RefreshToken); revokeErr != nil && !errors.Is(revokeErr, ErrInvalidToken) {
+				return nil, fmt.Errorf("failed to revoke expired refresh token: %w", revokeErr)
+			}
+			return nil, ErrTokenExpired
+		}
 		return nil, ErrInvalidToken
 	}
 

@@ -54,6 +54,18 @@ func TestRejectInvalidTokens(t *testing.T) {
 		{name: "missing user", change: func(c jwt.MapClaims) { delete(c, "user_id") }},
 		{name: "mismatched subject", change: func(c jwt.MapClaims) { c["sub"] = "another-user" }},
 		{name: "expired", change: func(c jwt.MapClaims) { c["exp"] = time.Now().Add(-time.Hour).Unix() }, want: ErrExpiredToken},
+		{name: "expired wrong purpose", change: func(c jwt.MapClaims) {
+			c["exp"] = time.Now().Add(-time.Hour).Unix()
+			c["token_type"] = "refresh"
+		}},
+		{name: "expired without purpose", change: func(c jwt.MapClaims) {
+			c["exp"] = time.Now().Add(-time.Hour).Unix()
+			delete(c, "token_type")
+		}},
+		{name: "expired and not yet valid", change: func(c jwt.MapClaims) {
+			c["exp"] = time.Now().Add(-time.Hour).Unix()
+			c["nbf"] = time.Now().Add(time.Hour).Unix()
+		}},
 		{name: "wrong signing algorithm", method: jwt.SigningMethodHS384},
 		{name: "wrong signature", secret: "different-secret-at-least-32-characters"},
 	}
