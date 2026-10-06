@@ -17,17 +17,24 @@ var ErrNotFound = redis.Nil
 
 func NewClient(addr string) (*Client, error) {
 	rdb := redis.NewClient(&redis.Options{
-		Addr: addr,
+		Addr:                  addr,
+		ContextTimeoutEnabled: true,
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	if err := rdb.Ping(ctx).Err(); err != nil {
+		_ = rdb.Close()
 		return nil, fmt.Errorf("redis ping failed: %w", err)
 	}
 
 	return &Client{rdb: rdb}, nil
+}
+
+// Close releases the connections after HTTP handlers and the email worker stop.
+func (c *Client) Close() error {
+	return c.rdb.Close()
 }
 
 // AllowSlidingWindow returns true if the request is allowed (has not exceeded the limit).

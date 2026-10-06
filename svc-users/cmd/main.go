@@ -2,12 +2,12 @@ package main
 
 import (
 	"context"
+	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
-	"sync"
 	"syscall"
-	"time"
 
 	"github.com/joho/godotenv"
 
@@ -23,163 +23,93 @@ import (
 )
 
 func main() {
-	// 1. Initialize logger
 	logger.InitLogger("svc-users")
-	logger.Log.Info().Msg("Starting svc-users ...")
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	err := run(ctx)
+	stop()
+	if err != nil {
+		logger.Log.Error().Err(err).Msg("svc-users stopped with errors")
+		os.Exit(1)
+	}
+	logger.Log.Info().Msg("svc-users stopped")
+}
 
-	// 2. Load .ENV before parsing config
+// Returning from run executes dependency cleanup on both shutdown and startup errors.
+func run(ctx context.Context) error {
+	logger.Log.Info().Msg("Starting svc-users ...")
 	if err := godotenv.Load(".ENV"); err != nil {
 		logger.Log.Info().Msg("No .ENV file found, relying on OS environment variables")
 	}
 
-	// 3. Load Configurations
 	cfg, err := LoadConfig()
 	if err != nil {
-		logger.Log.Fatal().Err(err).Msg("Failed to load configurations")
+		return fmt.Errorf("load configuration: %w", err)
 	}
 
-	// 4. Initialize Tracer
 	tp, err := tracer.InitTracer("svc-users", cfg.OtlpEndpoint)
 	if err != nil {
-		logger.Log.Fatal().Err(err).Msg("Failed to initialize tracer")
+		return fmt.Errorf("initialize tracer: %w", err)
 	}
-	defer func() {
-		if err := tp.Shutdown(context.Background()); err != nil {
-			logger.Log.Error().Err(err).Msg("Failed to shutdown tracer")
-		}
-	}()
+	defer closeWithTimeout("tracer", tp.Shutdown)
 
-	// 5. Connect MongoDB
 	mongoClient, err := mongodb.ConnectMongoDB(cfg.MongoURI)
 	if err != nil {
-		logger.Log.Fatal().Err(err).Msg("Failed to connect to MongoDB")
+		return fmt.Errorf("connect MongoDB: %w", err)
 	}
-	defer func() {
-		if err := mongoClient.Disconnect(context.Background()); err != nil {
-			logger.Log.Error().Err(err).Msg("Failed to disconnect MongoDB")
-		}
-	}()
+	defer closeWithTimeout("MongoDB", mongoClient.Disconnect)
 	database := mongoClient.Database(cfg.MongoDBName)
 	logger.Log.Info().Str("dbName", cfg.MongoDBName).Msg("Using database")
 
-	usersRepo, err := mongodb.NewUsersRepository(context.Background(), database)
+	usersRepo, err := mongodb.NewUsersRepository(ctx, database)
 	if err != nil {
-		logger.Log.Fatal().Err(err).Msg("Failed to create users repository")
+		return fmt.Errorf("create users repository: %w", err)
 	}
 
-	// 6. Connect Redis
 	rdb, err := redisclient.NewClient(cfg.RedisAddr)
 	if err != nil {
-		logger.Log.Fatal().Err(err).Msg("Failed to connect to Redis")
+		return fmt.Errorf("connect Redis: %w", err)
 	}
-
-	// 7. Token Maker
-	tokenMaker, err := token.NewJWTMaker(cfg.TokenSymmetricKey)
-	if err != nil {
-		logger.Log.Fatal().Err(err).Msg("Failed to create token maker")
-	}
-
-	// 8. Wallet gRPC Client
-	walletClient, err := wallet.NewClient(cfg.WalletGrpcAddr)
-	if err != nil {
-		logger.Log.Fatal().Err(err).Msg("Failed to create wallet client")
-	}
-
-	// 9. Email Worker (Background Job)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	var wg sync.WaitGroup
-	jobsChan := make(chan users.EmailJob, 100)
-	emailWorker := jobs.NewEmailWorker(
-		jobsChan,
-		rdb,
-		cfg.SMTPHost,
-		cfg.SMTPPort,
-		cfg.SMTPUser,
-		cfg.SMTPPass,
-		cfg.SenderEmail,
-	)
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		emailWorker.Start(ctx)
-	}()
-
-	// 10. Service & Controller
-	service := users.NewService(
-		usersRepo,
-		walletClient,
-		jobsChan,
-		tokenMaker,
-		cfg.AccessTokenDur,
-		cfg.RefreshTokenDur,
-		rdb,
-	)
-
-	controller := rest.NewController(service, cfg.SecureCookies)
-
-	// 11. Router
-	mux := rest.NewRouter(controller, rdb, tokenMaker)
-	handler := rest.RequestLogger(rest.MetricsMiddleware(mux))
-
-	// 12. HTTP Server
-	server := &http.Server{
-		Addr:    ":" + cfg.ServerPort,
-		Handler: handler,
-	}
-
-	go func() {
-		logger.Log.Info().Str("port", cfg.ServerPort).Msg("Users HTTP server is listening")
-		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logger.Log.Fatal().Err(err).Msg("Server crashed")
+	defer func() {
+		if err := rdb.Close(); err != nil {
+			logger.Log.Error().Err(err).Msg("Failed to close Redis")
 		}
 	}()
 
-	// 13. Graceful Shutdown
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
-
-	<-quit
-	logger.Log.Info().Msg("Shutting down svc-users gracefully...")
-
-	// Shutdown HTTP Server (Stops accepting new requests)
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer shutdownCancel()
-
-	if err := server.Shutdown(shutdownCtx); err != nil {
-		logger.Log.Error().Err(err).Msg("Server forced to shutdown")
-	} else {
-		logger.Log.Info().Msg("HTTP Server shut down")
+	tokenMaker, err := token.NewJWTMaker(cfg.TokenSymmetricKey)
+	if err != nil {
+		return fmt.Errorf("create token maker: %w", err)
 	}
 
-	// Close the Wallet gRPC connection
-	if err := walletClient.Close(); err != nil {
-		logger.Log.Error().Err(err).Msg("Failed to close wallet gRPC client")
-	} else {
-		logger.Log.Info().Msg("Wallet gRPC client closed")
+	walletClient, err := wallet.NewClient(cfg.WalletGrpcAddr)
+	if err != nil {
+		return fmt.Errorf("create wallet client: %w", err)
 	}
-
-	// Gracefully shutdown the email worker by closing its channel
-	// Note: We close the channel so it drains pending jobs and exits safely.
-	logger.Log.Info().Msg("Waiting for background workers to finish...")
-	close(jobsChan)
-
-	// We use a separate goroutine to wait so we can enforce a timeout
-	done := make(chan struct{})
-	go func() {
-		wg.Wait()
-		close(done)
+	defer func() {
+		if err := walletClient.Close(); err != nil {
+			logger.Log.Error().Err(err).Msg("Failed to close Wallet gRPC client")
+		}
 	}()
 
-	select {
-	case <-done:
-		logger.Log.Info().Msg("Background workers finished successfully")
-	case <-time.After(5 * time.Second):
-		logger.Log.Warn().Msg("Timeout waiting for background workers. Forcing shutdown.")
-		cancel() // Force cancel context for email worker if it's stuck
+	jobsChan := make(chan users.EmailJob, 100)
+	emailWorker := jobs.NewEmailWorker(
+		jobsChan, rdb, cfg.SMTPHost, cfg.SMTPPort,
+		cfg.SMTPUser, cfg.SMTPPass, cfg.SenderEmail,
+	)
+	service := users.NewService(
+		usersRepo, walletClient, jobsChan, tokenMaker,
+		cfg.AccessTokenDur, cfg.RefreshTokenDur, rdb,
+	)
+	controller := rest.NewController(service, cfg.SecureCookies)
+	mux := rest.NewRouter(controller, rdb, tokenMaker)
+	server := &http.Server{
+		Addr:    ":" + cfg.ServerPort,
+		Handler: rest.RequestLogger(rest.MetricsMiddleware(mux)),
 	}
 
-	logger.Log.Info().Msg("svc-users exited safely")
+	listener, err := net.Listen("tcp", server.Addr)
+	if err != nil {
+		return fmt.Errorf("listen for HTTP requests: %w", err)
+	}
+	logger.Log.Info().Str("port", cfg.ServerPort).Msg("Users HTTP server is listening")
+	return serve(ctx, server, listener, jobsChan, emailWorker.Start, defaultShutdownTimeouts)
 }

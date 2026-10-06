@@ -36,6 +36,10 @@ func (w *EmailWorker) Start(ctx context.Context) {
 	log.Info().Msg("Email worker started")
 
 	for {
+		if ctx.Err() != nil {
+			log.Info().Msg("Email worker stopping...")
+			return
+		}
 		select {
 		case <-ctx.Done():
 			log.Info().Msg("Email worker stopping...")
@@ -74,9 +78,12 @@ func (w *EmailWorker) processJob(ctx context.Context, job users.EmailJob, log ze
 	m.SetBody("text/html", body)
 
 	// Send email
-	if err := w.dialer.DialAndSend(m); err != nil {
+	if err := sendEmail(ctx, w.dialer, m); err != nil {
 		log.Error().Err(err).Str("email", job.Email).Msg("Failed to send verification email")
-		_ = w.rdb.Del(ctx, "email_verify:"+job.Token)
+		// Shutdown cancellation must not prevent cleanup of an unsent token.
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = w.rdb.Del(cleanupCtx, "email_verify:"+job.Token)
 		return
 	}
 
