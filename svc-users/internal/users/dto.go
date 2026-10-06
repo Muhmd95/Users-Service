@@ -8,6 +8,13 @@ import (
 	"time"
 )
 
+
+// EmailJob defines the data needed to verify an email
+type EmailJob struct {
+	Email string
+	Token string
+}
+
 // --- Auth DTOs ---
 
 type RegisterUserRequest struct {

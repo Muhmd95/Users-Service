@@ -16,11 +16,7 @@ import (
 	"svc-users/util/token"
 )
 
-// EmailJob defines the data needed to verify an email
-type EmailJob struct {
-	Email string
-	Token string
-}
+
 
 // VerificationTokenStore is the email-token storage used by the service.
 type VerificationTokenStore interface {
