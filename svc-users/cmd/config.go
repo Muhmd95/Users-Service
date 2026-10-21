@@ -13,6 +13,7 @@ type Config struct {
 	MongoDBName       string
 	RedisAddr         string
 	WalletGrpcAddr    string
+	TransactionsGrpcAddr string
 	TokenSymmetricKey string
 	AccessTokenDur    time.Duration
 	RefreshTokenDur   time.Duration
@@ -35,6 +36,10 @@ func LoadConfig() (*Config, error) {
 	walletGrpcAddr := os.Getenv("WALLET_GRPC_URL")
 	if walletGrpcAddr == "" {
 		return nil, fmt.Errorf("WALLET_GRPC_URL environment variable is required")
+	}
+	transactionsGrpcAddr := os.Getenv("TRANSACTIONS_GRPC_URL")
+	if transactionsGrpcAddr == "" {
+		return nil, fmt.Errorf("TRANSACTIONS_GRPC_URL environment variable is required")
 	}
 
 	tokenKey := os.Getenv("JWT_SECRET")
@@ -63,6 +68,7 @@ func LoadConfig() (*Config, error) {
 		MongoDBName:       getEnvOrDefault("MONGO_DB_NAME", "users_db"),
 		RedisAddr:         getEnvOrDefault("REDIS_ADDR", "localhost:6379"),
 		WalletGrpcAddr:    walletGrpcAddr,
+		TransactionsGrpcAddr: transactionsGrpcAddr,
 		TokenSymmetricKey: tokenKey,
 		AccessTokenDur:    accessDur,
 		RefreshTokenDur:   refreshDur,

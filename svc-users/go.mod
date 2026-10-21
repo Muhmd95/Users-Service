@@ -12,6 +12,7 @@ require (
 	github.com/swaggo/http-swagger/v2 v2.0.2
 	github.com/swaggo/swag v1.16.6
 	go.mongodb.org/mongo-driver v1.17.10
+	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.70.0
 	go.opentelemetry.io/otel v1.46.0
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.46.0
 	go.opentelemetry.io/otel/sdk v1.46.0

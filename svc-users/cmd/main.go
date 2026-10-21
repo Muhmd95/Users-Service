@@ -14,6 +14,7 @@ import (
 	jobs "svc-users/Jobs"
 	"svc-users/api/rest"
 	"svc-users/client/wallet"
+	"svc-users/client/transactions"
 	"svc-users/external/mongodb"
 	redisclient "svc-users/external/redis"
 	"svc-users/internal/users"
@@ -90,13 +91,23 @@ func run(ctx context.Context) error {
 		}
 	}()
 
+	transactionsClient, err := transactions.NewClient(cfg.TransactionsGrpcAddr)
+	if err != nil {
+		return fmt.Errorf("create transactions client: %w", err)
+	}
+	defer func() {
+		if err := transactionsClient.Close(); err != nil {
+			logger.Log.Error().Err(err).Msg("Failed to close Transactions gRPC client")
+		}
+	}()
+
 	jobsChan := make(chan users.EmailJob, 100)
 	emailWorker := jobs.NewEmailWorker(
 		jobsChan, rdb, cfg.SMTPHost, cfg.SMTPPort,
 		cfg.SMTPUser, cfg.SMTPPass, cfg.SenderEmail,
 	)
 	service := users.NewService(
-		usersRepo, walletClient, jobsChan, tokenMaker,
+		usersRepo, walletClient, transactionsClient, jobsChan, tokenMaker,
 		cfg.AccessTokenDur, cfg.RefreshTokenDur, rdb,
 	)
 	controller := rest.NewController(service, cfg.SecureCookies)

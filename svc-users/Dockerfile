@@ -4,9 +4,16 @@ FROM golang:1.26.5-alpine AS builder
 WORKDIR /app
 
 COPY go.mod go.sum ./
+# Build against the reviewed contract source until its next published version.
+COPY --from=contracts go.mod go.sum /contracts/
+COPY --from=contracts transactions /contracts/transactions
+COPY --from=contracts wallet /contracts/wallet
+COPY --from=contracts notifications /contracts/notifications
+RUN go mod edit -replace=github.com/Muhmd95/Contracts=/contracts
 RUN go mod download
 
 COPY . .
+RUN go mod edit -replace=github.com/Muhmd95/Contracts=/contracts
 
 # Build the application pointing specifically to the cmd folder
 RUN CGO_ENABLED=0 GOOS=linux go build -o users-service ./cmd
