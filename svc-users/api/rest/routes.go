@@ -71,6 +71,10 @@ func NewRouter(c *Controller, rdb *redis.Client, tokenMaker token.Maker) *http.S
 	mux.Handle("GET /v1/users/me/wallets/{wallet_id}/balance", protected(c.GetWalletBalance))
 	mux.Handle("DELETE /v1/users/me/wallets/{wallet_id}", protected(c.DeleteWallet))
 
+	mux.Handle("POST /v1/users/me/transactions/deposit", protected(c.Deposit))
+	mux.Handle("POST /v1/users/me/transactions/withdraw", protected(c.Withdraw))
+	mux.Handle("POST /v1/users/me/transactions/transfer", protected(c.Transfer))
+
 	// Metrics endpoint (Prometheus)
 	mux.Handle("/metrics", promhttp.Handler())
 

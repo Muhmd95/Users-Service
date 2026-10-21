@@ -37,6 +37,7 @@ type WalletClient interface {
 type Service struct {
 	repo                 Repository
 	walletClient         WalletClient
+	transactionsClient   TransactionsClient
 	emailJobs            chan<- EmailJob
 	tokenMaker           token.Maker
 	accessTokenDuration  time.Duration
@@ -44,10 +45,11 @@ type Service struct {
 	rdb                  VerificationTokenStore
 }
 
-func NewService(repo Repository, walletClient WalletClient, emailJobs chan<- EmailJob, tokenMaker token.Maker, accessDuration, refreshDuration time.Duration, rdb VerificationTokenStore) *Service {
+func NewService(repo Repository, walletClient WalletClient, transactionsClient TransactionsClient, emailJobs chan<- EmailJob, tokenMaker token.Maker, accessDuration, refreshDuration time.Duration, rdb VerificationTokenStore) *Service {
 	return &Service{
 		repo:                 repo,
 		walletClient:         walletClient,
+		transactionsClient:   transactionsClient,
 		emailJobs:            emailJobs,
 		tokenMaker:           tokenMaker,
 		accessTokenDuration:  accessDuration,
