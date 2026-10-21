@@ -56,4 +56,5 @@ var (
 	ErrTokenRevoked             = errors.New("refresh token has been revoked")
 	ErrPhoneHasWallet           = errors.New("cannot remove phone number associated with a wallet")
 	ErrWalletOwnership          = errors.New("forbidden: you do not own this wallet")
+	ErrPhoneOwnership           = errors.New("forbidden: phone number is not registered to your account")
 )

@@ -3,6 +3,7 @@ package users
 import (
 	"context"
 	"fmt"
+	"slices"
 	"time"
 )
 
@@ -26,11 +27,11 @@ type TransactionResponse struct {
 }
 
 type TransferResponse struct {
-	TransactionID string `json:"transaction_id"`
+	TransactionID  string `json:"transaction_id"`
 	SenderWalletID string `json:"sender_wallet_id"`
-	Status        string `json:"status"`
-	BalanceAfter  int64  `json:"balance_after"`
-	BalanceBefore int64  `json:"balance_before"`
+	Status         string `json:"status"`
+	BalanceAfter   int64  `json:"balance_after"`
+	BalanceBefore  int64  `json:"balance_before"`
 }
 
 type TransactionsClient interface {
@@ -55,6 +56,11 @@ func (s *Service) authorizeTransaction(ctx context.Context, userID, phone string
 	}
 	if user.Status != "ACTIVE" {
 		return ErrUserSuspended
+	}
+	// The normalized phone must still be registered to this account, even if
+	// Wallet retains an older ownership association.
+	if !slices.Contains(user.PhoneNumbers, phone) {
+		return ErrPhoneOwnership
 	}
 	wallets, err := s.walletClient.GetUserWallets(ctx, userID)
 	if err != nil {

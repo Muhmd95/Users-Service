@@ -40,7 +40,7 @@ func handleError(w http.ResponseWriter, err error) {
 	case users.ErrInvalidCredentials, users.ErrUserSuspended, users.ErrUserDeleted,
 		users.ErrEmailNotVerified, users.ErrInvalidToken, users.ErrTokenExpired, users.ErrTokenRevoked:
 		respondError(w, http.StatusUnauthorized, err.Error())
-	case users.ErrWalletOwnership:
+	case users.ErrWalletOwnership, users.ErrPhoneOwnership:
 		respondError(w, http.StatusForbidden, err.Error())
 	default:
 		// Mask raw/internal errors

@@ -68,7 +68,7 @@ func TestRefreshRequiresRefreshPurposeAndActiveRecord(t *testing.T) {
 				t.Fatal(err)
 			}
 			repo := &refreshRepository{record: &RefreshToken{UserID: userID, Revoked: tt.revoked}, revokeErr: tt.revokeErr}
-			svc := NewService(repo, nil, nil, maker, 15*time.Minute, time.Hour, nil)
+			svc := NewService(repo, nil, nil, nil, maker, 15*time.Minute, time.Hour, nil)
 			resp, err := svc.RefreshToken(context.Background(), &RefreshTokenRequest{RefreshToken: raw})
 			if !errors.Is(err, tt.want) {
 				t.Fatalf("expected %v, got %v", tt.want, err)
